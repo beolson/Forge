@@ -1,5 +1,25 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!**/routeTree.gen.ts",
+      "!!**/.output",
+      "!!**/.turbo",
+      "!!**/.nitro",
+      "!!**/dist",
+      "!!**/build",
+      "!!**/coverage"
+    ]
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    },
+    "formatter": {
+      "enabled": true
+    }
+  },
   "formatter": {
     "enabled": true,
     "indentStyle": "space",

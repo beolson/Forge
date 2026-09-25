@@ -3,6 +3,8 @@
 Bun workspaces for apps in `02_Apps/*` and libraries in `03_Libraries/*`.
 Each package should have its own `package.json`. Use `workspace:*` for dependencies between local packages.
 
+The Forge SSR app lives in [`02_Apps/forge`](02_Apps/forge/README.md).
+
 ```sh
 bun install
 bun run build
