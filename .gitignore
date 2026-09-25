@@ -1,0 +1,8 @@
+node_modules/
+.turbo/
+dist/
+build/
+coverage/
+.env
+.env.*
+!.env.example
