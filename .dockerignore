@@ -1,0 +1,16 @@
+.git
+.agents
+.codex
+.turbo
+.env*
+.cloudbeaver-seed.json
+**/.env*
+node_modules
+**/node_modules
+**/.turbo
+**/.tanstack
+**/.output
+**/coverage
+**/dist
+**/build
+04_Infrastucture

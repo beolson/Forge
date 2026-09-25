@@ -1,0 +1,102 @@
+name: forge-local
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      FORGE_DB_PASSWORD: ${FORGE_DB_PASSWORD:?Set FORGE_DB_PASSWORD in .env}
+      SEMAPHORE_DB_PASSWORD: ${SEMAPHORE_DB_PASSWORD:?Set SEMAPHORE_DB_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  forge:
+    build:
+      context: ../..
+      dockerfile: 02_Apps/forge/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://forge:${FORGE_DB_PASSWORD:?Set FORGE_DB_PASSWORD in .env}@postgres:5432/forge
+    ports:
+      - "127.0.0.1:5321:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  semaphore:
+    image: semaphoreui/semaphore:v2.19.12
+    restart: unless-stopped
+    environment:
+      SEMAPHORE_DB_DIALECT: postgres
+      SEMAPHORE_DB_HOST: postgres
+      SEMAPHORE_DB_PORT: "5432"
+      SEMAPHORE_DB: semaphore
+      SEMAPHORE_DB_USER: semaphore
+      SEMAPHORE_DB_PASS: ${SEMAPHORE_DB_PASSWORD:?Set SEMAPHORE_DB_PASSWORD in .env}
+      SEMAPHORE_ADMIN: ${SEMAPHORE_ADMIN:-admin}
+      SEMAPHORE_ADMIN_NAME: ${SEMAPHORE_ADMIN_NAME:-Admin}
+      SEMAPHORE_ADMIN_EMAIL: ${SEMAPHORE_ADMIN_EMAIL:-admin@localhost}
+      SEMAPHORE_ADMIN_PASSWORD: ${SEMAPHORE_ADMIN_PASSWORD:?Set SEMAPHORE_ADMIN_PASSWORD in .env}
+      SEMAPHORE_ACCESS_KEY_ENCRYPTION: ${SEMAPHORE_ACCESS_KEY_ENCRYPTION:?Set SEMAPHORE_ACCESS_KEY_ENCRYPTION in .env}
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - semaphore_config:/etc/semaphore
+      - semaphore_data:/var/lib/semaphore
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  cloudbeaver-init:
+    image: busybox:1.37.0
+    user: "0:0"
+    command:
+      - sh
+      - -ec
+      - |
+        mkdir -p /workspace/GlobalConfiguration/.dbeaver
+        if [ ! -f /workspace/GlobalConfiguration/.dbeaver/data-sources.json ]; then
+          cp /seed/data-sources.json /workspace/GlobalConfiguration/.dbeaver/data-sources.json
+        fi
+        chown -R 8978:8978 /workspace
+    volumes:
+      - cloudbeaver_data:/workspace
+      - ../../.cloudbeaver-seed.json:/seed/data-sources.json:ro
+
+  cloudbeaver:
+    image: dbeaver/cloudbeaver:26.2.1
+    restart: unless-stopped
+    environment:
+      CB_SERVER_NAME: Forge Local
+      CB_SERVER_URL: http://localhost:8081/
+      CB_ADMIN_NAME: forgeadmin
+      CB_ADMIN_PASSWORD: ${CLOUDBEAVER_ADMIN_PASSWORD:?Set CLOUDBEAVER_ADMIN_PASSWORD in .env}
+      CLOUDBEAVER_APP_ANONYMOUS_ACCESS_ENABLED: "true"
+      CLOUDBEAVER_APP_GRANT_CONNECTIONS_ACCESS_TO_ANONYMOUS_TEAM: "true"
+    ports:
+      - "127.0.0.1:8081:8978"
+    volumes:
+      - cloudbeaver_data:/opt/cloudbeaver/workspace
+    depends_on:
+      cloudbeaver-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  semaphore_config:
+  semaphore_data:
+  cloudbeaver_data:
