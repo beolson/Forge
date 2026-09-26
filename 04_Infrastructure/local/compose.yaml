@@ -22,6 +22,29 @@ services:
       retries: 12
       start_period: 10s
 
+  servicebus-sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: ${SERVICEBUS_ACCEPT_EULA:?Set SERVICEBUS_ACCEPT_EULA=Y after accepting the emulator and SQL Server terms}
+      MSSQL_SA_PASSWORD: ${SERVICEBUS_SQL_PASSWORD:?Set SERVICEBUS_SQL_PASSWORD in .env}
+
+  servicebus-emulator:
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: ${SERVICEBUS_ACCEPT_EULA:?Set SERVICEBUS_ACCEPT_EULA=Y after accepting the emulator and SQL Server terms}
+      SQL_SERVER: servicebus-sql
+      MSSQL_SA_PASSWORD: ${SERVICEBUS_SQL_PASSWORD:?Set SERVICEBUS_SQL_PASSWORD in .env}
+      EMULATOR_HTTP_PORT: "5300"
+    volumes:
+      - ./servicebus-config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:5300:5300"
+    depends_on:
+      - servicebus-sql
+
   forge:
     build:
       context: ../..
@@ -34,6 +57,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      semaphore-bootstrap:
+        condition: service_completed_successfully
 
   semaphore:
     image: semaphoreui/semaphore:v2.19.12
@@ -55,9 +80,22 @@ services:
     volumes:
       - semaphore_config:/etc/semaphore
       - semaphore_data:/var/lib/semaphore
+      - ../semaphore:/opt/forge/semaphore:ro
     depends_on:
       postgres:
         condition: service_healthy
+
+  semaphore-bootstrap:
+    image: python:3.13-alpine
+    environment:
+      SEMAPHORE_URL: http://semaphore:3000
+      SEMAPHORE_ADMIN: ${SEMAPHORE_ADMIN:-admin}
+      SEMAPHORE_ADMIN_PASSWORD: ${SEMAPHORE_ADMIN_PASSWORD:?Set SEMAPHORE_ADMIN_PASSWORD in .env}
+    volumes:
+      - ./configure-semaphore.py:/configure-semaphore.py:ro
+    command: ["python", "/configure-semaphore.py"]
+    depends_on:
+      - semaphore
 
   cloudbeaver-init:
     image: busybox:1.37.0
