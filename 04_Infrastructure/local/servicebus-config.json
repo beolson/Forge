@@ -7,8 +7,8 @@
           {
             "Name": "forge-requests",
             "Properties": {
-              "DeadLetteringOnMessageExpiration": false,
-              "DefaultMessageTimeToLive": "PT1H",
+              "DeadLetteringOnMessageExpiration": true,
+              "DefaultMessageTimeToLive": "P14D",
               "DuplicateDetectionHistoryTimeWindow": "PT5M",
               "ForwardDeadLetteredMessagesTo": "",
               "ForwardTo": "",
@@ -21,8 +21,8 @@
           {
             "Name": "forge-results",
             "Properties": {
-              "DeadLetteringOnMessageExpiration": false,
-              "DefaultMessageTimeToLive": "PT1H",
+              "DeadLetteringOnMessageExpiration": true,
+              "DefaultMessageTimeToLive": "P14D",
               "DuplicateDetectionHistoryTimeWindow": "PT5M",
               "ForwardDeadLetteredMessagesTo": "",
               "ForwardTo": "",

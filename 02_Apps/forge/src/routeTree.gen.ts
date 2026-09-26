@@ -14,6 +14,7 @@ import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as AuthErrorRouteImport } from './routes/auth.error'
 import { Route as AuthLoginRouteImport } from './routes/auth.login'
 import { Route as AuthSignedOutRouteImport } from './routes/auth.signed-out'
+import { Route as ApiProjectsEventsRouteImport } from './routes/api.projects.events'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -40,6 +41,11 @@ const AuthSignedOutRoute = AuthSignedOutRouteImport.update({
   path: '/auth/signed-out',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiProjectsEventsRoute = ApiProjectsEventsRouteImport.update({
+  id: '/api/projects/events',
+  path: '/api/projects/events',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -47,6 +53,7 @@ export interface FileRoutesByFullPath {
   '/auth/error': typeof AuthErrorRoute
   '/auth/login': typeof AuthLoginRoute
   '/auth/signed-out': typeof AuthSignedOutRoute
+  '/api/projects/events': typeof ApiProjectsEventsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -54,6 +61,7 @@ export interface FileRoutesByTo {
   '/auth/error': typeof AuthErrorRoute
   '/auth/login': typeof AuthLoginRoute
   '/auth/signed-out': typeof AuthSignedOutRoute
+  '/api/projects/events': typeof ApiProjectsEventsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -62,14 +70,25 @@ export interface FileRoutesById {
   '/auth/error': typeof AuthErrorRoute
   '/auth/login': typeof AuthLoginRoute
   '/auth/signed-out': typeof AuthSignedOutRoute
+  '/api/projects/events': typeof ApiProjectsEventsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/auth/callback' | '/auth/error' | '/auth/login' | '/auth/signed-out'
+    | '/'
+    | '/auth/callback'
+    | '/auth/error'
+    | '/auth/login'
+    | '/auth/signed-out'
+    | '/api/projects/events'
   fileRoutesByTo: FileRoutesByTo
   to:
-    '/' | '/auth/callback' | '/auth/error' | '/auth/login' | '/auth/signed-out'
+    | '/'
+    | '/auth/callback'
+    | '/auth/error'
+    | '/auth/login'
+    | '/auth/signed-out'
+    | '/api/projects/events'
   id:
     | '__root__'
     | '/'
@@ -77,6 +96,7 @@ export interface FileRouteTypes {
     | '/auth/error'
     | '/auth/login'
     | '/auth/signed-out'
+    | '/api/projects/events'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -85,6 +105,7 @@ export interface RootRouteChildren {
   AuthErrorRoute: typeof AuthErrorRoute
   AuthLoginRoute: typeof AuthLoginRoute
   AuthSignedOutRoute: typeof AuthSignedOutRoute
+  ApiProjectsEventsRoute: typeof ApiProjectsEventsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -124,6 +145,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthSignedOutRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/projects/events': {
+      id: '/api/projects/events'
+      path: '/api/projects/events'
+      fullPath: '/api/projects/events'
+      preLoaderRoute: typeof ApiProjectsEventsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -133,6 +161,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthErrorRoute: AuthErrorRoute,
   AuthLoginRoute: AuthLoginRoute,
   AuthSignedOutRoute: AuthSignedOutRoute,
+  ApiProjectsEventsRoute: ApiProjectsEventsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

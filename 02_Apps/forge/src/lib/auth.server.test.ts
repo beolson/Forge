@@ -129,6 +129,7 @@ test("callback creates a session only for the configured tenant", async () => {
         tenantId: process.env.FORGE_ENTRA_TENANT_ID,
         objectId: "user-id",
         name: "Alex",
+        groups: [],
       },
     }),
   );

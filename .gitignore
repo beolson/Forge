@@ -8,3 +8,6 @@ coverage/
 .env.*
 !.env.example
 .cloudbeaver-seed.json
+__pycache__/
+*.pyc
+.secrets/

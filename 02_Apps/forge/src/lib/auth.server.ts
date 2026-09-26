@@ -13,6 +13,7 @@ export type ForgeUser = {
   tenantId: string;
   objectId: string;
   name: string;
+  groups: string[];
 };
 
 type Flow = {
@@ -179,6 +180,11 @@ export async function finishLogin(request: Request): Promise<Response> {
         tenantId,
         objectId: claims.oid,
         name: typeof claims.name === "string" ? claims.name : "Microsoft user",
+        groups: Array.isArray(claims.groups)
+          ? claims.groups.filter(
+              (group): group is string => typeof group === "string",
+            )
+          : [],
       },
       expiresAt: Date.now() + SESSION_AGE * 1000,
     });
@@ -200,6 +206,16 @@ export async function currentUser(): Promise<ForgeUser | null> {
     return null;
   }
   return session.data.user;
+}
+
+export function isAdmin(user: ForgeUser): boolean {
+  const groupId = process.env.FORGE_ADMIN_GROUP_ID;
+  return Boolean(
+    groupId &&
+      (user.groups ?? []).some(
+        (group) => group.toLowerCase() === groupId.toLowerCase(),
+      ),
+  );
 }
 
 export async function signOut(): Promise<void> {

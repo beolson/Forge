@@ -15,6 +15,12 @@ REPOSITORY_NAME = "Forge automation"
 REPOSITORY_PATH = "/opt/forge/semaphore"
 KEY_NAME = "Local (no credentials)"
 TEMPLATE_NAME = "Verify local scripts"
+AUTOMATION_TEMPLATES = {
+    "azureCreate": ("Create Azure resource group", "scripts/azure_create.py"),
+    "azureRollback": ("Roll back Azure resource group", "scripts/azure_rollback.py"),
+    "githubCreate": ("Create GitHub repository", "scripts/github_create.py"),
+    "githubRollback": ("Roll back GitHub repository", "scripts/github_rollback.py"),
+}
 
 opener = urllib.request.build_opener(
     urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
@@ -114,6 +120,53 @@ def main():
                 "description": "Confirm that Semaphore can run a script from the local Forge folder.",
             },
         )
+
+    template_ids = {}
+    for operation, (name, script) in AUTOMATION_TEMPLATES.items():
+        template = next((item for item in templates if item["name"] == name), None)
+        desired = {
+            "project_id": project_id,
+            "repository_id": repository["id"],
+            "name": name,
+            "app": "python",
+            "playbook": script,
+            "arguments": "[]",
+            "description": "Forge project creation or rollback; invoked by DBOS.",
+        }
+        if template is None:
+            template = api("POST", templates_path, desired)
+        elif any(template.get(field) != value for field, value in desired.items()):
+            api("PUT", f"{templates_path}/{template['id']}", {**desired, "id": template["id"]})
+        template_ids[operation] = template["id"]
+
+    connection_file = os.environ.get("SEMAPHORE_CONNECTION_FILE")
+    if connection_file:
+        os.makedirs(os.path.dirname(connection_file), exist_ok=True)
+        token = None
+        if os.path.exists(connection_file):
+            with open(connection_file, encoding="utf-8") as saved:
+                token = json.load(saved).get("token")
+        if token:
+            probe = urllib.request.Request(
+                BASE_URL + f"/api/project/{project_id}/tasks",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            try:
+                with urllib.request.urlopen(probe, timeout=10):
+                    pass
+            except urllib.error.HTTPError as error:
+                if error.code == 401 or error.code == 403:
+                    token = None
+                else:
+                    raise
+        if not token:
+            token = api("POST", "/api/user/tokens")["id"]
+        data = {"url": BASE_URL, "token": token, "projectId": project_id, "templates": template_ids}
+        temporary = connection_file + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as output:
+            json.dump(data, output)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, connection_file)
 
     print(f"Semaphore project '{PROJECT_NAME}' uses {REPOSITORY_PATH} and has a verification task")
 

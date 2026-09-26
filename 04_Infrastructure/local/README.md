@@ -1,6 +1,6 @@
 # Local Docker stack
 
-This stack runs Forge's production build, PostgreSQL, Semaphore UI, CloudBeaver,
+This stack runs Forge's production build, its DBOS orchestrator, PostgreSQL, Semaphore UI, CloudBeaver,
 and Microsoft's Azure Service Bus emulator with its SQL Server dependency.
 PostgreSQL has separate `forge` and `semaphore` databases and users.
 `just up` also creates a `Forge local` project in Semaphore with a repository
@@ -8,6 +8,8 @@ pointing at the local [`../semaphore`](../semaphore) folder. That folder is
 mounted read-only at `/opt/forge/semaphore` in the Semaphore container, so edits
 to its scripts and other files are available without rebuilding the image.
 The setup step is safe to run again and keeps an existing local project.
+It also registers the four project creation and rollback templates and shares a
+Semaphore API token with the DBOS container through a local Docker volume.
 Open the `Forge local` project, select **Task Templates**, and run **Verify local
 scripts**. A successful task prints `Forge local Semaphore script ran successfully.`
 in its log.
@@ -31,6 +33,10 @@ requires 2 GB of RAM and 5 GB of free disk space in addition to the rest of
 the stack.
 The Semaphore admin account is created on first startup; changing the admin
 password in `.env` later does not reset it.
+For real project provisioning, complete the Azure service principal, GitHub App,
+and Entra admin group steps in [project-provisioning.md](../../docs/project-provisioning.md)
+before starting the stack. A project submission creates real Azure and GitHub
+resources in the configured subscription and organization.
 
 ```sh
 just up
@@ -75,7 +81,9 @@ The generated seed and CloudBeaver workspace contain the local PostgreSQL admin
 password, so keep them on this development machine. Changing the PostgreSQL
 password or CloudBeaver admin password later requires updating the stored settings
 or recreating only the `cloudbeaver_data` volume.
-The Forge app receives `DATABASE_URL`, but does not yet use the database.
+The Forge app stores projects, activity, and its Service Bus outbox in the `forge`
+database. DBOS stores its durable workflow state in the same database under its
+own schema.
 Compose stores PostgreSQL, Semaphore, and CloudBeaver data in named volumes. `just down`
 keeps them; running the equivalent Compose `down -v` command deletes them.
 Database creation runs only when the PostgreSQL volume is empty, so changing

@@ -8,6 +8,8 @@ For the local Docker stack, see [`04_Infrastructure/local`](04_Infrastructure/lo
 Copy `.env.example` to `.env`, set the secrets, then run `just up` from the
 repository root.
 
+The project-creation vertical slice is described in [docs/project-provisioning.md](docs/project-provisioning.md). Azure resource and sub-resource designations are registered in [docs/resource-designations.md](docs/resource-designations.md).
+
 ## Infrastructure layout
 
 ```text

@@ -5,6 +5,8 @@ WORKDIR /workspace
 # Install from the workspace lockfile before copying source for better layer caching.
 COPY package.json bun.lock ./
 COPY 02_Apps/forge/package.json 02_Apps/forge/package.json
+COPY 03_Libraries/project/package.json 03_Libraries/project/package.json
+COPY 02_Apps/orchestrator/package.json 02_Apps/orchestrator/package.json
 RUN bun install --frozen-lockfile
 
 COPY . .
