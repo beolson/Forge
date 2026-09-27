@@ -1,0 +1,187 @@
+name: forge-local
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      FORGE_DB_PASSWORD: ${FORGE_DB_PASSWORD:?Set FORGE_DB_PASSWORD in .env}
+      SEMAPHORE_DB_PASSWORD: ${SEMAPHORE_DB_PASSWORD:?Set SEMAPHORE_DB_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  servicebus-sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: ${SERVICEBUS_ACCEPT_EULA:?Set SERVICEBUS_ACCEPT_EULA=Y after accepting the emulator and SQL Server terms}
+      MSSQL_SA_PASSWORD: ${SERVICEBUS_SQL_PASSWORD:?Set SERVICEBUS_SQL_PASSWORD in .env}
+
+  servicebus-emulator:
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: ${SERVICEBUS_ACCEPT_EULA:?Set SERVICEBUS_ACCEPT_EULA=Y after accepting the emulator and SQL Server terms}
+      SQL_SERVER: servicebus-sql
+      MSSQL_SA_PASSWORD: ${SERVICEBUS_SQL_PASSWORD:?Set SERVICEBUS_SQL_PASSWORD in .env}
+      EMULATOR_HTTP_PORT: "5300"
+    volumes:
+      - ./servicebus-config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:5300:5300"
+    depends_on:
+      - servicebus-sql
+
+  forge:
+    build:
+      context: ../..
+      dockerfile: 02_Apps/forge/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://forge:${FORGE_DB_PASSWORD:?Set FORGE_DB_PASSWORD in .env}@postgres:5432/forge
+      FORGE_ENTRA_TENANT_ID: ${FORGE_ENTRA_TENANT_ID:?Set FORGE_ENTRA_TENANT_ID in .env}
+      FORGE_ENTRA_CLIENT_ID: ${FORGE_ENTRA_CLIENT_ID:?Set FORGE_ENTRA_CLIENT_ID in .env}
+      FORGE_ENTRA_CLIENT_SECRET: ${FORGE_ENTRA_CLIENT_SECRET:?Set FORGE_ENTRA_CLIENT_SECRET in .env}
+      FORGE_AUTH_REDIRECT_URI: ${FORGE_AUTH_REDIRECT_URI:?Set FORGE_AUTH_REDIRECT_URI in .env}
+      FORGE_SESSION_SECRET: ${FORGE_SESSION_SECRET:?Set FORGE_SESSION_SECRET in .env}
+      FORGE_ADMIN_GROUP_ID: ${FORGE_ADMIN_GROUP_ID:?Set FORGE_ADMIN_GROUP_ID in .env}
+      AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID in .env}
+      GITHUB_ORG: ${GITHUB_ORG:?Set GITHUB_ORG in .env}
+      SERVICEBUS_CONNECTION_STRING: Endpoint=sb://servicebus-emulator;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
+    ports:
+      - "127.0.0.1:5321:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      semaphore-bootstrap:
+        condition: service_completed_successfully
+      servicebus-emulator:
+        condition: service_started
+
+  orchestrator:
+    build:
+      context: ../..
+      dockerfile: 02_Apps/orchestrator/Dockerfile
+    restart: unless-stopped
+    environment:
+      DBOS_SYSTEM_DATABASE_URL: postgresql://forge:${FORGE_DB_PASSWORD:?Set FORGE_DB_PASSWORD in .env}@postgres:5432/forge
+      SERVICEBUS_CONNECTION_STRING: Endpoint=sb://servicebus-emulator;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
+      SEMAPHORE_CONNECTION_FILE: /run/forge/semaphore-connection.json
+      SEMAPHORE_TASK_TIMEOUT_MS: ${SEMAPHORE_TASK_TIMEOUT_MS:-1800000}
+    volumes:
+      - semaphore_connection:/run/forge:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      semaphore-bootstrap:
+        condition: service_completed_successfully
+      servicebus-emulator:
+        condition: service_started
+
+  semaphore:
+    build:
+      context: ../semaphore
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      SEMAPHORE_DB_DIALECT: postgres
+      SEMAPHORE_DB_HOST: postgres
+      SEMAPHORE_DB_PORT: "5432"
+      SEMAPHORE_DB: semaphore
+      SEMAPHORE_DB_USER: semaphore
+      SEMAPHORE_DB_PASS: ${SEMAPHORE_DB_PASSWORD:?Set SEMAPHORE_DB_PASSWORD in .env}
+      SEMAPHORE_ADMIN: ${SEMAPHORE_ADMIN:-admin}
+      SEMAPHORE_ADMIN_NAME: ${SEMAPHORE_ADMIN_NAME:-Admin}
+      SEMAPHORE_ADMIN_EMAIL: ${SEMAPHORE_ADMIN_EMAIL:-admin@localhost}
+      SEMAPHORE_ADMIN_PASSWORD: ${SEMAPHORE_ADMIN_PASSWORD:?Set SEMAPHORE_ADMIN_PASSWORD in .env}
+      SEMAPHORE_ACCESS_KEY_ENCRYPTION: ${SEMAPHORE_ACCESS_KEY_ENCRYPTION:?Set SEMAPHORE_ACCESS_KEY_ENCRYPTION in .env}
+      SEMAPHORE_FORWARDED_ENV_VARS: '["AZURE_TENANT_ID","AZURE_CLIENT_ID","AZURE_CLIENT_SECRET","AZURE_SUBSCRIPTION_ID","AZURE_REGION","GITHUB_ORG","GITHUB_APP_ID","GITHUB_APP_INSTALLATION_ID","GITHUB_APP_PRIVATE_KEY_FILE"]'
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:?Set AZURE_TENANT_ID in .env}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:?Set AZURE_CLIENT_ID in .env}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:?Set AZURE_CLIENT_SECRET in .env}
+      AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID in .env}
+      AZURE_REGION: ${AZURE_REGION:?Set AZURE_REGION in .env}
+      GITHUB_ORG: ${GITHUB_ORG:?Set GITHUB_ORG in .env}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:?Set GITHUB_APP_ID in .env}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?Set GITHUB_APP_INSTALLATION_ID in .env}
+      GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github-app.pem
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - semaphore_config:/etc/semaphore
+      - semaphore_data:/var/lib/semaphore
+      - ../semaphore:/opt/forge/semaphore:ro
+      - ${GITHUB_APP_PRIVATE_KEY_PATH:?Set GITHUB_APP_PRIVATE_KEY_PATH in .env}:/run/secrets/github-app.pem:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  semaphore-bootstrap:
+    image: python:3.13-alpine
+    environment:
+      SEMAPHORE_URL: http://semaphore:3000
+      SEMAPHORE_ADMIN: ${SEMAPHORE_ADMIN:-admin}
+      SEMAPHORE_ADMIN_PASSWORD: ${SEMAPHORE_ADMIN_PASSWORD:?Set SEMAPHORE_ADMIN_PASSWORD in .env}
+      SEMAPHORE_CONNECTION_FILE: /run/forge/semaphore-connection.json
+    volumes:
+      - ./configure-semaphore.py:/configure-semaphore.py:ro
+      - semaphore_connection:/run/forge
+    command: ["python", "/configure-semaphore.py"]
+    depends_on:
+      - semaphore
+
+  cloudbeaver-init:
+    image: busybox:1.37.0
+    user: "0:0"
+    command:
+      - sh
+      - -ec
+      - |
+        mkdir -p /workspace/GlobalConfiguration/.dbeaver
+        if [ ! -f /workspace/GlobalConfiguration/.dbeaver/data-sources.json ]; then
+          cp /seed/data-sources.json /workspace/GlobalConfiguration/.dbeaver/data-sources.json
+        fi
+        chown -R 8978:8978 /workspace
+    volumes:
+      - cloudbeaver_data:/workspace
+      - ../../.cloudbeaver-seed.json:/seed/data-sources.json:ro
+
+  cloudbeaver:
+    image: dbeaver/cloudbeaver:26.2.1
+    restart: unless-stopped
+    environment:
+      CB_SERVER_NAME: Forge Local
+      CB_SERVER_URL: http://localhost:8081/
+      CB_ADMIN_NAME: forgeadmin
+      CB_ADMIN_PASSWORD: ${CLOUDBEAVER_ADMIN_PASSWORD:?Set CLOUDBEAVER_ADMIN_PASSWORD in .env}
+      CLOUDBEAVER_APP_ANONYMOUS_ACCESS_ENABLED: "true"
+      CLOUDBEAVER_APP_GRANT_CONNECTIONS_ACCESS_TO_ANONYMOUS_TEAM: "true"
+    ports:
+      - "127.0.0.1:8081:8978"
+    volumes:
+      - cloudbeaver_data:/opt/cloudbeaver/workspace
+    depends_on:
+      cloudbeaver-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  semaphore_config:
+  semaphore_data:
+  semaphore_connection:
+  cloudbeaver_data:

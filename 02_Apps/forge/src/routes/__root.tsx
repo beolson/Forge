@@ -1,8 +1,30 @@
-import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
+import {
+  createRootRoute,
+  HeadContent,
+  redirect,
+  Scripts,
+} from "@tanstack/react-router";
+import { getCurrentUser } from "@/lib/auth.functions";
 
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
+  beforeLoad: async ({ location }) => {
+    if (
+      location.pathname === "/auth/error" ||
+      location.pathname === "/auth/signed-out"
+    ) {
+      return { user: null };
+    }
+    const user = await getCurrentUser();
+    if (!user) {
+      const returnTo = `${location.pathname}${location.searchStr ?? ""}`;
+      throw redirect({
+        href: `/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
+      });
+    }
+    return { user };
+  },
   head: () => ({
     meta: [
       {
