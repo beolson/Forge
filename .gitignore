@@ -11,3 +11,4 @@ coverage/
 __pycache__/
 *.pyc
 .secrets/
+*:Zone.Identifier
