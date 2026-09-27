@@ -10,6 +10,9 @@ to its scripts and other files are available without rebuilding the image.
 The setup step is safe to run again and keeps an existing local project.
 It also registers the four project creation and rollback templates and shares a
 Semaphore API token with the DBOS container through a local Docker volume.
+Azure creation uses a subscription-scoped Bicep template with an Azure CLI Bash
+wrapper; Azure rollback is a separate Bash task, and the GitHub tasks use Python.
+The Semaphore image includes Azure CLI and Bicep and currently builds for Linux x86_64.
 Open the `Forge local` project, select **Task Templates**, and run **Verify local
 scripts**. A successful task prints `Forge local Semaphore script ran successfully.`
 in its log.

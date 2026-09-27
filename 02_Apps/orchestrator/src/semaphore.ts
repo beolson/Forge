@@ -61,13 +61,10 @@ export async function startTask(
     throw new Error(
       `Semaphore ${resource}${operation} template is not configured`,
     );
-  const message = Buffer.from(
-    JSON.stringify({
-      ...request,
-      runKey: `${request.projectId}:${request.attempt}:${phase}:${resource}:${attempt}`,
-    }),
-    "utf8",
-  ).toString("base64");
+  const message = `${request.projectId}:${request.attempt}:${phase}:${resource}:${operation}:${attempt}`;
+  const argumentsJSON = JSON.stringify([
+    Buffer.from(JSON.stringify(request), "utf8").toString("base64"),
+  ]);
   const existing = async () => {
     const tasks = await api<{ id: number; message: string }[]>(
       `/api/project/${current.projectId}/tasks?limit=200`,
@@ -81,7 +78,11 @@ export async function startTask(
       `/api/project/${current.projectId}/tasks`,
       {
         method: "POST",
-        body: JSON.stringify({ template_id: template, message }),
+        body: JSON.stringify({
+          template_id: template,
+          message,
+          arguments: argumentsJSON,
+        }),
       },
     );
     return task.id;

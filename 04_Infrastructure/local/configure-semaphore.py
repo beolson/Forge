@@ -16,10 +16,10 @@ REPOSITORY_PATH = "/opt/forge/semaphore"
 KEY_NAME = "Local (no credentials)"
 TEMPLATE_NAME = "Verify local scripts"
 AUTOMATION_TEMPLATES = {
-    "azureCreate": ("Create Azure resource group", "scripts/azure_create.py"),
-    "azureRollback": ("Roll back Azure resource group", "scripts/azure_rollback.py"),
-    "githubCreate": ("Create GitHub repository", "scripts/github_create.py"),
-    "githubRollback": ("Roll back GitHub repository", "scripts/github_rollback.py"),
+    "azureCreate": ("Create Azure resource group", "bash", "scripts/azure_create.sh"),
+    "azureRollback": ("Roll back Azure resource group", "bash", "scripts/azure_rollback.sh"),
+    "githubCreate": ("Create GitHub repository", "python", "scripts/github_create.py"),
+    "githubRollback": ("Roll back GitHub repository", "python", "scripts/github_rollback.py"),
 }
 
 opener = urllib.request.build_opener(
@@ -122,15 +122,16 @@ def main():
         )
 
     template_ids = {}
-    for operation, (name, script) in AUTOMATION_TEMPLATES.items():
+    for operation, (name, app, script) in AUTOMATION_TEMPLATES.items():
         template = next((item for item in templates if item["name"] == name), None)
         desired = {
             "project_id": project_id,
             "repository_id": repository["id"],
             "name": name,
-            "app": "python",
+            "app": app,
             "playbook": script,
             "arguments": "[]",
+            "allow_override_args_in_task": True,
             "description": "Forge project creation or rollback; invoked by DBOS.",
         }
         if template is None:

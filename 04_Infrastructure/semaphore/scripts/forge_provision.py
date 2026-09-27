@@ -1,4 +1,4 @@
-"""Provider operations run only inside Semaphore. The task message is base64 JSON."""
+"""GitHub operations run only inside Semaphore. The task argument holds base64 JSON."""
 
 import base64
 import json
@@ -20,11 +20,13 @@ def required(name: str) -> str:
 
 
 def payload() -> dict:
-    encoded = required("SEMAPHORE_TASK_DETAILS_MESSAGE")
+    if len(sys.argv) != 2:
+        raise RuntimeError("Forge task requires one payload argument")
+    encoded = sys.argv[1]
     try:
         value = json.loads(base64.b64decode(encoded, validate=True))
     except (ValueError, json.JSONDecodeError) as error:
-        raise RuntimeError("Invalid Forge task message") from error
+        raise RuntimeError("Invalid Forge task payload") from error
     if not re.fullmatch(r"[0-9a-f-]{36}", value.get("projectId", "")):
         raise RuntimeError("Invalid project ID")
     if not re.fullmatch(r"[A-Z]{5}", value.get("code", "")):
@@ -38,14 +40,11 @@ def payload() -> dict:
 
 
 def request(method: str, url: str, headers: dict | None = None, body: dict | None = None,
-            form: dict | None = None, allow_missing: bool = False):
+            allow_missing: bool = False):
     data = None
     if body is not None:
         data = json.dumps(body).encode()
         headers = {**(headers or {}), "Content-Type": "application/json"}
-    if form is not None:
-        data = urllib.parse.urlencode(form).encode()
-        headers = {**(headers or {}), "Content-Type": "application/x-www-form-urlencoded"}
     req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
     try:
         with urllib.request.urlopen(req, timeout=60) as response:
@@ -56,49 +55,6 @@ def request(method: str, url: str, headers: dict | None = None, body: dict | Non
             return 404, None
         # Provider response bodies can contain request data. Do not print them.
         raise RuntimeError(f"Provider API returned HTTP {error.code} for {method} {url.split('?')[0]}") from error
-
-
-def azure_token() -> str:
-    tenant = required("AZURE_TENANT_ID")
-    _, result = request("POST", f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token", form={
-        "client_id": required("AZURE_CLIENT_ID"),
-        "client_secret": required("AZURE_CLIENT_SECRET"),
-        "grant_type": "client_credentials",
-        "scope": "https://management.azure.com/.default",
-    })
-    return result["access_token"]
-
-
-def azure(operation: str, project: dict):
-    name = f"az-{project['code'].lower()}-resgp"
-    subscription = required("AZURE_SUBSCRIPTION_ID")
-    url = f"https://management.azure.com/subscriptions/{subscription}/resourcegroups/{name}?api-version=2021-04-01"
-    headers = {"Authorization": f"Bearer {azure_token()}"}
-    status, existing = request("GET", url, headers, allow_missing=True)
-    if operation == "create":
-        if status == 404:
-            request("PUT", url, headers, body={"location": required("AZURE_REGION"), "tags": {
-                "forgeProjectId": project["projectId"], "forgeCode": project["code"]}})
-            print(f"Created resource group {name}")
-            return
-        if existing.get("tags", {}).get("forgeProjectId") != project["projectId"]:
-            raise RuntimeError(f"Resource group {name} already exists and is not owned by this Forge project")
-        print(f"Resource group {name} already belongs to this project")
-        return
-    if status == 404:
-        print(f"Resource group {name} is absent")
-        return
-    if existing.get("tags", {}).get("forgeProjectId") != project["projectId"]:
-        raise RuntimeError(f"Refusing to delete resource group {name}: ownership marker differs")
-    request("DELETE", url, headers, allow_missing=True)
-    deadline = time.monotonic() + 25 * 60
-    while time.monotonic() < deadline:
-        time.sleep(10)
-        status, _ = request("GET", url, headers, allow_missing=True)
-        if status == 404:
-            print(f"Rolled back resource group {name}")
-            return
-    raise RuntimeError(f"Resource group {name} deletion did not finish within 25 minutes")
 
 
 def github_token() -> str:
@@ -145,15 +101,10 @@ def github(operation: str, project: dict):
     print(f"Rolled back repository {org}/{name}")
 
 
-def run(provider: str, operation: str):
+def run(operation: str):
     try:
         project = payload()
-        if provider == "azure":
-            azure(operation, project)
-        elif provider == "github":
-            github(operation, project)
-        else:
-            raise RuntimeError("Unknown provider")
+        github(operation, project)
     except Exception as error:
-        print(f"Forge {provider} {operation} failed: {error}", file=sys.stderr)
+        print(f"Forge github {operation} failed: {error}", file=sys.stderr)
         sys.exit(1)

@@ -13,6 +13,7 @@ All Forge-managed Azure resource names use:
 | Designation | Meaning | First used by | Example |
 | --- | --- | --- | --- |
 | `resgp` | Azure resource group | Project creation | `az-abcde-resgp` |
+| `rgdep` | Subscription deployment record for a project resource group | Project creation through Bicep | `az-abcde-rgdep` |
 
 ## Sub-designation registry
 
