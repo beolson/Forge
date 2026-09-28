@@ -47,9 +47,11 @@
         "vitest": "5.0.2",
       },
     },
-    "02_Apps/forge.provisioner": {
-      "name": "@hero4hire/provisioner",
+    "02_Apps/forge.orchistrator": {
+      "name": "@hero4hire/forge.orchistrator",
       "dependencies": {
+        "@azure/service-bus": "^7.9.5",
+        "@dbos-inc/dbos-sdk": "^4.6.0",
         "@hero4hire/automation": "workspace:*",
         "@hero4hire/project": "workspace:*",
       },
@@ -59,11 +61,9 @@
         "vitest": "5.0.2",
       },
     },
-    "02_Apps/orchestrator": {
-      "name": "@hero4hire/orchestrator",
+    "02_Apps/forge.provisioner": {
+      "name": "@hero4hire/provisioner",
       "dependencies": {
-        "@azure/service-bus": "^7.9.5",
-        "@dbos-inc/dbos-sdk": "^4.6.0",
         "@hero4hire/automation": "workspace:*",
         "@hero4hire/project": "workspace:*",
       },
@@ -242,7 +242,7 @@
 
     "@hero4hire/forge": ["@hero4hire/forge@workspace:02_Apps/forge"],
 
-    "@hero4hire/orchestrator": ["@hero4hire/orchestrator@workspace:02_Apps/orchestrator"],
+    "@hero4hire/forge.orchistrator": ["@hero4hire/forge.orchistrator@workspace:02_Apps/forge.orchistrator"],
 
     "@hero4hire/project": ["@hero4hire/project@workspace:03_Libraries/project"],
 

@@ -4,6 +4,7 @@ Bun workspaces for apps in `02_Apps/*` and libraries in `03_Libraries/*`.
 Each package should have its own `package.json`. Use `workspace:*` for dependencies between local packages.
 
 The Forge SSR app lives in [`02_Apps/forge`](02_Apps/forge/README.md).
+The DBOS orchestration app lives in `02_Apps/forge.orchistrator`.
 For the local Docker stack, see [`04_Infrastructure/local`](04_Infrastructure/local/README.md).
 Copy `.env.example` to `.env`, set the secrets, then run `just up` from the
 repository root.
