@@ -11,7 +11,11 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServiceBusSender } from "@azure/service-bus";
-import type { ExecutionVersion, RunEvent } from "@hero4hire/automation";
+import type {
+  ExecutionVersion,
+  RunEvent,
+  RunRecord,
+} from "@hero4hire/automation";
 import type { ProjectRequest } from "@hero4hire/project";
 import { afterAll, beforeAll, expect, test, vi } from "vitest";
 
@@ -36,6 +40,8 @@ let starts = 0;
 let loseCreate = false;
 let loseStart = false;
 let catalogInspections = 0;
+const deleted: string[] = [];
+let restartOnDelete = "";
 const request: ProjectRequest = {
   kind: "create-project",
   projectId: "e513e0da-08e4-4f64-a111-bb6bb9cfdc38",
@@ -175,6 +181,12 @@ beforeAll(async () => {
     const container = containers.get(name);
     if (!container) return respond({}, 404);
     if (req.method === "DELETE") {
+      if (name.startsWith("forge-run-")) {
+        expect(url.searchParams.has("force")).toBe(false);
+        if (restartOnDelete === name) container.State.Running = true;
+        if (container.State.Running) return respond({}, 409);
+        deleted.push(name);
+      }
       containers.delete(name);
       return respond(null);
     }
@@ -190,7 +202,7 @@ beforeAll(async () => {
         return;
       }
     }
-    if (path.endsWith("/json")) return respond(container);
+    if (path.endsWith("/json")) return respond({ Id: name, ...container });
     if (path.endsWith("/start")) {
       starts++;
       container.State.Status = "running";
@@ -403,4 +415,121 @@ test("delete runs the packaged handler with concrete ownership arguments and no 
       settings: { ...version.settings, azureSubscriptionId: "changed" },
     }),
   ).rejects.toThrow("version");
+});
+
+test("clearing completed containers preserves recovery and logs and skips unsafe runs", async () => {
+  const cases = [
+    "succeeded",
+    "failed",
+    "stopped",
+    "uncaptured",
+    "unknown",
+    "running",
+    "wrong-image",
+    "wrong-label",
+    "restart",
+  ];
+  const ids = new Map<string, string>();
+  for (const [index, name] of cases.entries()) {
+    const id = await runners.startTask(
+      request,
+      "azure",
+      "Create",
+      "clear",
+      index + 1,
+      version,
+    );
+    ids.set(name, id);
+    const container = containers.get(`forge-run-${id}`);
+    if (!container) throw new Error("Expected execution");
+    if (name !== "running") {
+      container.State.Status = "exited";
+      container.State.Running = false;
+      container.State.ExitCode =
+        name === "failed" || name === "stopped" ? 1 : 0;
+      container.State.FinishedAt = "2026-09-28T12:00:00Z";
+    }
+    if (name === "stopped")
+      await writeFile(join(directory, "runs", id, "stop.json"), "true");
+    await runners.taskStatus(id);
+    if (name === "unknown") {
+      const path = join(directory, "runs", id, "record.json");
+      const record = JSON.parse(await readFile(path, "utf8")) as RunRecord;
+      record.status = "unknown";
+      await writeFile(path, JSON.stringify(record));
+    }
+    await writeFile(
+      join(directory, "runs", id, "cursor.json"),
+      JSON.stringify({
+        timestamp: "",
+        sequence: 1,
+        complete: name !== "uncaptured",
+      }),
+    );
+    await writeFile(
+      join(directory, "runs", id, "output", "logs.jsonl"),
+      "retained log\n",
+    );
+    if (name === "wrong-image") container.Config.Image = "other-image";
+    if (name === "wrong-label")
+      container.Config.Labels["forge.runId"] = "other-run";
+    if (name === "restart") restartOnDelete = `forge-run-${id}`;
+  }
+  const beforeDeleted = deleted.length;
+  const beforeCreates = creates;
+  const beforeStarts = starts;
+  const result = await runners.clearCompletedRuns();
+  expect(result.removed).toBeGreaterThanOrEqual(3);
+  expect(
+    deleted
+      .slice(beforeDeleted)
+      .filter((name) =>
+        [...ids.values()].some((id) => name === `forge-run-${id}`),
+      ),
+  ).toEqual(
+    ["succeeded", "failed", "stopped"]
+      .map((name) => `forge-run-${ids.get(name)}`)
+      .sort(),
+  );
+  for (const [index, name] of cases.entries()) {
+    const id = ids.get(name) as string;
+    expect(containers.has(`forge-run-${id}`)).toBe(
+      !["succeeded", "failed", "stopped"].includes(name),
+    );
+    expect(
+      await readFile(
+        join(directory, "runs", id, "output", "logs.jsonl"),
+        "utf8",
+      ),
+    ).toBe("retained log\n");
+    if (["succeeded", "failed", "stopped"].includes(name)) {
+      expect(await runners.taskStatus(id)).toBe(name);
+      expect(
+        await runners.startTask(
+          request,
+          "azure",
+          "Create",
+          "clear",
+          index + 1,
+          version,
+        ),
+      ).toBe(id);
+      await expect(
+        runners.startTask(request, "azure", "Create", "clear", index + 1, {
+          ...version,
+          image: "other-image",
+        }),
+      ).rejects.toThrow("version");
+      expect(await readdir(join(directory, "runs", id, "work"))).toContain(
+        "request.json",
+      );
+    }
+  }
+  expect(creates).toBe(beforeCreates);
+  expect(starts).toBe(beforeStarts);
+  expect((await runners.clearCompletedRuns()).removed).toBe(0);
+  expect(await runners.previousVersion({ ...request, attempt: 3 })).toEqual(
+    version,
+  );
+  expect(await readdir(join(directory, "outbox"))).not.toHaveLength(0);
 });

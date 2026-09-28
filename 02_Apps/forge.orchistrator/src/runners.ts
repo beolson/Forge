@@ -30,6 +30,10 @@ const dataVolume = process.env.RUNNER_DATA_VOLUME || "forge-local-runner-data";
 const credentialVolume =
   process.env.RUNNER_CREDENTIAL_VOLUME || "forge-local-runner-credentials";
 const terminal = new Set(["succeeded", "failed", "stopped", "unknown"]);
+const completed = (record: RunRecord) =>
+  terminal.has(record.status) &&
+  record.status !== "unknown" &&
+  !!record.finishedAt;
 
 async function readJSON<T>(path: string): Promise<T | null> {
   try {
@@ -178,6 +182,7 @@ async function event(run: RunRecord, logs: RunLog[] = []): Promise<void> {
 }
 
 type Container = {
+  Id: string;
   Config: { Image: string; Labels: Record<string, string> };
   State: {
     Status: string;
@@ -255,6 +260,8 @@ export async function startTask(
     throw new Error(
       "Execution identity or image does not match its pinned version",
     );
+  // Cleared containers still have an authoritative outcome for workflow replay.
+  if (completed(record)) return id;
   if (!current) {
     if (
       record.status !== "queued" ||
@@ -348,6 +355,7 @@ export async function startTask(
 export async function taskStatus(id: string): Promise<RunRecord["status"]> {
   const record = await readJSON<RunRecord>(runPath(id));
   if (!record) throw new Error("Execution recovery record is unavailable");
+  if (completed(record)) return record.status;
   const current = await inspect(record.container);
   const stopRequested = await readJSON<boolean>(
     join(root, "runs", id, "stop.json"),
@@ -425,6 +433,51 @@ type Cursor = {
   complete: boolean;
   offset?: number;
 };
+
+/** Remove completed containers only; preserve history, logs, and recovery data. */
+export async function clearCompletedRuns(): Promise<{
+  removed: number;
+  skipped: number;
+}> {
+  const result = { removed: 0, skipped: 0 };
+  await mkdir(join(root, "runs"), { recursive: true });
+  for (const id of await readdir(join(root, "runs"))) {
+    if (!/^[a-f0-9]{32}$/.test(id)) continue;
+    const record = await readJSON<RunRecord>(runPath(id));
+    if (!record) continue;
+    const cursor = await readJSON<Cursor>(
+      join(root, "runs", id, "cursor.json"),
+    );
+    if (!completed(record) || !cursor?.complete) {
+      result.skipped++;
+      continue;
+    }
+    const current = await inspect(record.container);
+    if (!current) continue;
+    if (
+      record.id !== id ||
+      record.container !== `forge-run-${id}` ||
+      current.Config.Labels["forge.runId"] !== id ||
+      current.Config.Image !== record.version.image ||
+      current.State.Running ||
+      current.State.Status !== "exited"
+    ) {
+      result.skipped++;
+      continue;
+    }
+    try {
+      // Never force removal: Docker also rejects a concurrent restart.
+      await docker("DELETE", `/containers/${current.Id}`);
+      result.removed++;
+    } catch (error) {
+      if (!(error instanceof DockerError)) throw error;
+      if (error.status === 409) result.skipped++;
+      else if (error.status !== 404) throw error;
+    }
+  }
+  return result;
+}
+
 async function* logLines(record: RunRecord, cursor: Cursor) {
   const output = join(root, "runs", record.id, "output");
   const path = join(output, "logs.jsonl");

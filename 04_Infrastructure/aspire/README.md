@@ -83,6 +83,15 @@ appear. Finished tasks remain visible until DBOS prunes their containers. Docker
 outages show unavailable/unknown states and observation retries automatically.
 There are no start/stop/restart actions on observed tasks; DBOS owns their lifecycle.
 
+To clear completed task entries, open the `forge-provisioner` actions menu and
+choose **Clear completed runs**. After confirmation, the orchestrator removes
+only exited containers with a saved successful, failed, or stopped outcome and
+fully captured logs. Active, uncertain, and incompletely captured runs are kept.
+Forge's admin history, durable logs, recovery records, and pinned images remain
+available. Cleared entries disappear on the next observer poll; workflow replay
+uses the saved outcome without launching the task again. The orchestrator must
+be running to perform cleanup. Retrying cleanup is safe.
+
 Console logs start with the last 200 Docker log lines on attachment, then stream
 new output without replaying overlap. Only the executor's redacted JSON records
 are forwarded. Container environment variables and credential mounts are not

@@ -6,6 +6,7 @@ import {
   type ParameterResource,
   refExpr,
 } from "./.aspire/modules/aspire.mjs";
+import { clearCompletedRuns } from "./clear-runs.mjs";
 import { type Configuration, loadConfiguration } from "./config.mjs";
 
 const apphostDirectory = dirname(fileURLToPath(import.meta.url));
@@ -49,6 +50,20 @@ const network = await builder
   .waitForCompletion(preflight)
   .withHiddenOnCompletion();
 const provisioner = await builder.addForgeProvisioner("forge-provisioner");
+await provisioner.withCommand(
+  "clear-completed-runs",
+  "Clear completed runs",
+  clearCompletedRuns,
+  {
+    commandOptions: {
+      description:
+        "Remove completed task containers from the dashboard while keeping Forge history and logs.",
+      confirmationMessage:
+        "Clear completed runs from Aspire? Active and uncertain runs will be kept. Forge history and logs will remain available.",
+      iconName: "Delete",
+    },
+  },
+);
 const runnerImage = await builder
   .addExecutable("forge-provisioner-image", "docker", root, [
     "build",
