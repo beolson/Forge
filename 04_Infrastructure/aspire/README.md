@@ -39,9 +39,9 @@ to localhost. The dashboard and internal resource transport use HTTP locally.
 
 ```sh
 aspire describe
-aspire logs forge
-aspire logs orchestrator
-aspire resource orchestrator restart
+aspire logs forge-app
+aspire logs forge-orchistrator
+aspire resource forge-orchistrator restart
 aspire stop
 ```
 
@@ -51,9 +51,17 @@ OpenTelemetry instrumentation.
 
 ## Startup and persistent data
 
-The dashboard includes setup jobs for Docker/Compose preflight, the stable runner
-network, the provisioner image build, credential seeding, CloudBeaver seed and
-workspace preparation, and bounded PostgreSQL and Service Bus readiness checks.
+The main app entries use the repository names with Aspire-compatible hyphens:
+`forge-app`, `forge-orchistrator`, and `forge-provisioner`. The provisioner entry
+builds its image; DBOS still launches individual task containers. Its network and
+credential setup jobs are grouped beneath it. SQL Server is grouped beneath the
+Service Bus emulator, and database/UI setup jobs beneath their dependencies.
+
+Successful setup jobs disappear from the default list; failed jobs remain visible
+for troubleshooting. Use the dashboard's hidden-resource filter or
+`aspire describe --include-hidden` to inspect completed jobs and parameters.
+Configuration parameters are hidden. Forge runs its existing Bun/Vite dev script
+directly, so Aspire does not generate an unused package installer.
 DBOS starts after both dependencies are ready and its setup jobs succeed. Forge
 starts after PostgreSQL and Service Bus are ready. Inspect a failed setup job's
 logs when its dependents remain waiting.

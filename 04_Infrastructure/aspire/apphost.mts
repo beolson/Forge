@@ -27,24 +27,29 @@ const secretNames = new Set([
 ]);
 const parameters = {} as Record<keyof Configuration, ParameterResource>;
 for (const [name, value] of Object.entries(configuration)) {
-  parameters[name as keyof Configuration] = await builder.addParameter(
-    name.toLowerCase().replaceAll("_", "-"),
-    { value, secret: secretNames.has(name) },
-  );
+  parameters[name as keyof Configuration] = await builder
+    .addParameter(name.toLowerCase().replaceAll("_", "-"), {
+      value,
+      secret: secretNames.has(name),
+    })
+    .withHidden();
 }
 
-const preflight = await builder.addExecutable("preflight", "bun", root, [
-  "04_Infrastructure/aspire/setup.mts",
-  "preflight",
-]);
+const preflight = await builder
+  .addExecutable("forge-stack-setup", "bun", root, [
+    "04_Infrastructure/aspire/setup.mts",
+    "preflight",
+  ])
+  .withHiddenOnCompletion();
 const network = await builder
-  .addExecutable("runner-network", "bun", root, [
+  .addExecutable("forge-provisioner-network", "bun", root, [
     "04_Infrastructure/aspire/setup.mts",
     "network",
   ])
-  .waitForCompletion(preflight);
+  .waitForCompletion(preflight)
+  .withHiddenOnCompletion();
 const runnerImage = await builder
-  .addExecutable("runner-image", "docker", root, [
+  .addExecutable("forge-provisioner", "docker", root, [
     "build",
     "--tag",
     "forge-provisioner:local",
@@ -58,7 +63,8 @@ const cloudbeaverSeed = await builder
     "04_Infrastructure/local/write-cloudbeaver-seed.py",
   ])
   .withEnvironment("POSTGRES_PASSWORD", parameters.POSTGRES_PASSWORD)
-  .waitForCompletion(preflight);
+  .waitForCompletion(preflight)
+  .withHiddenOnCompletion();
 
 const postgres = await builder
   .addContainer("postgres", { image: "postgres", tag: "17-alpine" })
@@ -77,11 +83,13 @@ const postgres = await builder
   .withEndpoint({ name: "tcp", port: 5432, targetPort: 5432, isProxied: false })
   .waitForCompletion(preflight);
 const postgresReady = await builder
-  .addExecutable("postgres-ready", "bun", root, [
+  .addExecutable("postgres-setup", "bun", root, [
     "04_Infrastructure/aspire/setup.mts",
     "postgres",
   ])
-  .waitForStart(postgres);
+  .waitForStart(postgres)
+  .withParentRelationship(postgres)
+  .withHiddenOnCompletion();
 
 const sql = await builder
   .addContainer("servicebus-sql", {
@@ -121,14 +129,20 @@ const servicebus = await builder
   .withHttpHealthCheck({ path: "/health", endpointName: "health" })
   .waitForStart(sql);
 const servicebusReady = await builder
-  .addExecutable("servicebus-ready", "bun", root, [
+  .addExecutable("servicebus-setup", "bun", root, [
     "04_Infrastructure/aspire/setup.mts",
     "servicebus",
   ])
-  .waitForStart(servicebus);
+  .waitForStart(servicebus)
+  .withParentRelationship(servicebus)
+  .withHiddenOnCompletion();
+await sql.withParentRelationship(servicebus);
 
 const credentials = await builder
-  .addContainer("runner-credentials", { image: "python", tag: "3.13-alpine" })
+  .addContainer("forge-provisioner-credentials", {
+    image: "python",
+    tag: "3.13-alpine",
+  })
   .withVolume("/credentials", { name: "forge-local-runner-credentials" })
   .withBindMount(resolve(local, "seed-runner-credentials.py"), "/seed.py", {
     isReadOnly: true,
@@ -139,7 +153,10 @@ const credentials = await builder
     { isReadOnly: true },
   )
   .withArgs(["python", "/seed.py"])
-  .waitForCompletion(preflight);
+  .waitForCompletion(preflight)
+  .withHiddenOnCompletion();
+await network.withParentRelationship(runnerImage);
+await credentials.withParentRelationship(runnerImage);
 for (const name of [
   "AZURE_TENANT_ID",
   "AZURE_CLIENT_ID",
@@ -171,8 +188,9 @@ const cloudbeaverInit = await builder
       "chown -R 8978:8978 /workspace",
     ].join("\n"),
   ])
-  .waitForCompletion(cloudbeaverSeed);
-await builder
+  .waitForCompletion(cloudbeaverSeed)
+  .withHiddenOnCompletion();
+const cloudbeaver = await builder
   .addContainer("cloudbeaver", { image: "dbeaver/cloudbeaver", tag: "26.2.1" })
   .withEnvironment("CB_SERVER_NAME", "Forge Local")
   .withEnvironment("CB_SERVER_URL", "http://localhost:8081/")
@@ -189,24 +207,28 @@ await builder
   })
   .waitForCompletion(cloudbeaverInit)
   .waitForCompletion(postgresReady);
+await cloudbeaverSeed.withParentRelationship(cloudbeaver);
+await cloudbeaverInit.withParentRelationship(cloudbeaver);
 
 const pgEndpoint = await postgres.getEndpoint("tcp");
 const pgHost = await pgEndpoint.property(EndpointProperty.Host);
 const pgPort = await pgEndpoint.property(EndpointProperty.Port);
 const amqpEndpoint = await servicebus.getEndpoint("amqp");
 const amqpHost = await amqpEndpoint.property(EndpointProperty.Host);
-const databasePassword = await builder.addParameter("database-url-password", {
-  value: encodeURIComponent(configuration.FORGE_DB_PASSWORD),
-  secret: true,
-});
+const databasePassword = await builder
+  .addParameter("database-url-password", {
+    value: encodeURIComponent(configuration.FORGE_DB_PASSWORD),
+    secret: true,
+  })
+  .withHidden();
 const database = refExpr`postgresql://forge:${databasePassword}@${pgHost}:${pgPort}/forge`;
 const bus = refExpr`Endpoint=sb://${amqpHost};SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;`;
 
 const orchestrator = await builder
-  .addDockerfile("orchestrator", root, {
+  .addDockerfile("forge-orchistrator", root, {
     dockerfilePath: "02_Apps/forge.orchistrator/Dockerfile",
   })
-  .withContainerName("forge-aspire-orchestrator")
+  .withContainerName("forge-orchistrator")
   .withEnvironment("DBOS_SYSTEM_DATABASE_URL", database)
   .withEnvironment("SERVICEBUS_CONNECTION_STRING", bus)
   .withEnvironment("RUNNER_IMAGE", "forge-provisioner:local")
@@ -231,12 +253,16 @@ for (const name of [
 }
 
 const forge = await builder
-  .addViteApp("forge", resolve(root, "02_Apps/forge"))
-  .withBun({ install: false })
-  .withEndpointCallback("http", async (endpoint) => {
-    await endpoint.port.set(5321);
-    await endpoint.targetPort.set(5321);
-    await endpoint.isProxied.set(false);
+  // Run the existing Bun/Vite dev script without generating an unused installer.
+  .addExecutable("forge-app", "bun", resolve(root, "02_Apps/forge"), [
+    "run",
+    "dev",
+  ])
+  .withHttpEndpoint({
+    name: "http",
+    port: 5321,
+    targetPort: 5321,
+    isProxied: false,
   })
   .withEnvironment("DATABASE_URL", database)
   .withEnvironment("SERVICEBUS_CONNECTION_STRING", bus)
