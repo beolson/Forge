@@ -50,6 +50,19 @@ async function sourceToken(repository: string): Promise<string> {
   return result.token;
 }
 
+async function readSnapshot(file: (path: string) => Promise<string>) {
+  const manifestText = await file("tasks.json");
+  const manifest = parseManifest(JSON.parse(manifestText));
+  const paths = new Set(
+    manifest.tasks.flatMap((task) => [task.entrypoint, ...task.files]),
+  );
+  const files: Record<string, string> = { "tasks.json": manifestText };
+  for (const path of paths) files[path] = await file(path);
+  if (Buffer.byteLength(JSON.stringify({ manifest, files }), "utf8") > 180_000)
+    throw new Error("Task source snapshot is too large");
+  return { manifest, files };
+}
+
 export async function loadSource(): Promise<SourceSnapshot> {
   const directory = process.env.AUTOMATION_SOURCE_DIRECTORY;
   if (directory) return loadDevelopmentSource(directory);
@@ -84,22 +97,12 @@ export async function loadSource(): Promise<SourceSnapshot> {
       throw new Error(`Invalid source file: ${path}`);
     return Buffer.from(result.content, "base64").toString("utf8");
   };
-  const manifestText = await file("tasks.json");
-  const manifest = parseManifest(JSON.parse(manifestText));
-  const paths = new Set(
-    manifest.tasks.flatMap((task) => [task.entrypoint, ...task.files]),
-  );
-  const files: Record<string, string> = { "tasks.json": manifestText };
-  for (const path of paths) files[path] = await file(path);
-  if (JSON.stringify(files).length > 180_000)
-    throw new Error("Task source snapshot is too large");
   return {
     repository,
     revision: commit.sha,
     root,
     origin: "github",
-    manifest,
-    files,
+    ...(await readSnapshot(file)),
   };
 }
 
@@ -112,18 +115,11 @@ export async function loadDevelopmentSource(
     if (!target.startsWith(`${root}${sep}`))
       throw new Error("Source file escapes approved directory");
     const content = await readFile(target, "utf8");
-    if (content.length > 128_000) throw new Error("Source file is too large");
+    if (Buffer.byteLength(content, "utf8") > 128_000)
+      throw new Error("Source file is too large");
     return content;
   };
-  const text = await file("tasks.json");
-  const manifest = parseManifest(JSON.parse(text));
-  const files: Record<string, string> = { "tasks.json": text };
-  for (const path of new Set(
-    manifest.tasks.flatMap((task) => [task.entrypoint, ...task.files]),
-  ))
-    files[path] = await file(path);
-  if (JSON.stringify(files).length > 180_000)
-    throw new Error("Task source snapshot is too large");
+  const { manifest, files } = await readSnapshot(file);
   return {
     repository: "local development",
     root: "",

@@ -15,6 +15,8 @@ The Service Bus emulator has a one-hour maximum message lifetime and loses messa
 
 Detailed logs default to 90-day retention, configurable with `RUNNER_LOG_RETENTION_DAYS`; source snapshots, parameters, image IDs, and outcomes remain. The local observer also removes completed task containers after retention. Pinned image IDs and the `runner_data` volume must remain available for later rollback or admin retry.
 
+Each execution archives redacted output to its own writable subdirectory in `runner_data` before forwarding it to Docker. DBOS reads this durable JSONL file by byte offset, independently of Docker log rotation, and removes it after retention. Large diagnostic lines are redacted before splitting; log batches are bounded to fit Service Bus messages. Size local storage for all retained output.
+
 This Compose slice runs one web server and one orchestrator. Additional web replicas require a shared SSE fanout mechanism. The project runner profile is reserved; per-project service principals, Key Vault injection, in-group deployments, and Azure Container Apps deployment come later. See [the agreed runner design](container-job-runners.md).
 
 ## Azure setup

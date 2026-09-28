@@ -1,5 +1,10 @@
 import { EventEmitter } from "node:events";
-import type { RunEvent, RunLog, RunRecord } from "@hero4hire/automation";
+import type {
+  RunEvent,
+  RunLog,
+  RunRecord,
+  RunSummary,
+} from "@hero4hire/automation";
 import { parseManifest } from "@hero4hire/automation";
 import type { PoolClient } from "pg";
 import { isAdmin } from "./auth.server";
@@ -91,7 +96,7 @@ export async function listRuns(offset: number) {
   await requireAdmin();
   await ensureMessaging();
   const rows = await (await database()).query<{
-    data: RunRecord;
+    data: RunSummary;
     name: string;
     code: string;
   }>(

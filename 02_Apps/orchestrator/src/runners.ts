@@ -1,10 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import {
+  chmod,
   mkdir,
   readdir,
   readFile,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -173,6 +176,9 @@ export async function startTask(
     throw new Error("An execution exists without its recovery record");
   if (!record) {
     const work = join(root, "runs", id, "work");
+    const output = join(root, "runs", id, "output");
+    await mkdir(output, { recursive: true });
+    await chmod(output, 0o777);
     await mkdir(work, { recursive: true });
     for (const [path, text] of Object.entries(version.source.files)) {
       await mkdir(dirname(join(work, path)), { recursive: true });
@@ -250,6 +256,12 @@ export async function startTask(
             },
             {
               Type: "volume",
+              Source: dataVolume,
+              Target: "/run/forge-output",
+              VolumeOptions: { Subpath: `runs/${id}/output` },
+            },
+            {
+              Type: "volume",
               Source: credentialVolume,
               Target: "/run/secrets/forge",
               ReadOnly: true,
@@ -257,7 +269,8 @@ export async function startTask(
           ],
           LogConfig: {
             Type: "json-file",
-            Config: { "max-size": "20m", "max-file": "2" },
+            // The separate durable spool preserves output through log rotation.
+            Config: { "max-size": "20m", "max-file": "2", mode: "blocking" },
           },
         },
       });
@@ -361,7 +374,54 @@ export async function acknowledgeRunnerEvent(eventId: string): Promise<void> {
   );
 }
 
-type Cursor = { timestamp: string; sequence: number; complete: boolean };
+type Cursor = {
+  timestamp: string;
+  sequence: number;
+  complete: boolean;
+  offset?: number;
+};
+async function* logLines(record: RunRecord, cursor: Cursor) {
+  const output = join(root, "runs", record.id, "output");
+  const path = join(output, "logs.jsonl");
+  const archived = await stat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!archived) {
+    // Compatibility with old executions, or fallback if the archive is unavailable.
+    const since = cursor.timestamp
+      ? Math.floor(Date.parse(cursor.timestamp) / 1000)
+      : 0;
+    const bytes = await dockerBytes(
+      "GET",
+      `/containers/${record.container}/logs?stdout=1&stderr=1&timestamps=1&since=${since}`,
+    );
+    for (const line of decodeDockerLogs(bytes).split("\n").filter(Boolean)) {
+      const boundary = line.indexOf(" ");
+      const timestamp = line.slice(0, boundary);
+      if (timestamp > cursor.timestamp)
+        yield { text: line.slice(boundary + 1), timestamp, offset: undefined };
+    }
+    return;
+  }
+  let offset = cursor.offset || 0;
+  let pending = Buffer.alloc(0);
+  for await (const chunk of createReadStream(path, { start: offset })) {
+    pending = Buffer.concat([pending, chunk]);
+    let end = pending.indexOf(10);
+    while (end !== -1) {
+      offset += end + 1;
+      yield {
+        text: pending.subarray(0, end).toString("utf8"),
+        timestamp: "",
+        offset,
+      };
+      pending = pending.subarray(end + 1);
+      end = pending.indexOf(10);
+    }
+  }
+  // A partially written final line is read again on the next observation.
+}
 async function captureLogs(record: RunRecord): Promise<void> {
   const path = join(root, "runs", record.id, "cursor.json");
   const cursor = (await readJSON<Cursor>(path)) || {
@@ -370,37 +430,36 @@ async function captureLogs(record: RunRecord): Promise<void> {
     complete: false,
   };
   if (cursor.complete) return;
-  const since = cursor.timestamp
-    ? Math.floor(Date.parse(cursor.timestamp) / 1000)
-    : 0;
-  const bytes = await dockerBytes(
-    "GET",
-    `/containers/${record.container}/logs?stdout=1&stderr=1&timestamps=1&since=${since}`,
-  );
-  const lines = decodeDockerLogs(bytes).split("\n").filter(Boolean);
   let logs: RunLog[] = [];
-  for (const line of lines) {
-    const boundary = line.indexOf(" ");
-    const timestamp = line.slice(0, boundary);
-    if (timestamp <= cursor.timestamp) continue;
+  for await (const line of logLines(record, cursor)) {
     let entry: { timestamp?: string; stream?: string; text?: string };
     try {
-      entry = JSON.parse(line.slice(boundary + 1));
+      entry = JSON.parse(line.text);
     } catch {
       entry = {
         text: "Runner emitted an unstructured diagnostic; consult the local container.",
       };
     }
-    logs.push({
+    const log: RunLog = {
       sequence: ++cursor.sequence,
-      timestamp: entry.timestamp || timestamp,
+      timestamp: entry.timestamp || line.timestamp || record.createdAt,
       stream:
         entry.stream === "stdout" || entry.stream === "stderr"
           ? entry.stream
           : "system",
       text: String(entry.text || "").slice(0, 8192),
-    });
-    cursor.timestamp = timestamp;
+    };
+    if (
+      logs.length &&
+      Buffer.byteLength(JSON.stringify({ run: record, logs: [...logs, log] })) >
+        240_000
+    ) {
+      await event(record, logs);
+      logs = [];
+    }
+    logs.push(log);
+    cursor.timestamp = line.timestamp;
+    cursor.offset = line.offset;
     if (logs.length === 20) {
       await event(record, logs);
       logs = [];
@@ -412,7 +471,9 @@ async function captureLogs(record: RunRecord): Promise<void> {
   await saveJSON(path, cursor);
 }
 
-export async function observeRunners(sender: ServiceBusSender): Promise<void> {
+export async function observeRunners(
+  sender: ServiceBusSender,
+): Promise<() => void> {
   await mkdir(join(root, "runs"), { recursive: true });
   await mkdir(join(root, "outbox"), { recursive: true });
   const retention = Number(process.env.RUNNER_LOG_RETENTION_DAYS || 90);
@@ -446,6 +507,10 @@ export async function observeRunners(sender: ServiceBusSender): Promise<void> {
             join(root, "runs", id, "cursor.json"),
           );
           if (cursor?.complete) {
+            await rm(join(root, "runs", id, "output"), {
+              recursive: true,
+              force: true,
+            });
             try {
               await docker("DELETE", `/containers/${record.container}`);
             } catch {
@@ -483,11 +548,12 @@ export async function observeRunners(sender: ServiceBusSender): Promise<void> {
       busy = false;
     }
   };
-  setInterval(
+  const timer = setInterval(
     () =>
       void tick().catch(() =>
         console.error("Runner events temporarily unavailable; retrying"),
       ),
     1000,
   ).unref();
+  return () => clearInterval(timer);
 }

@@ -61,6 +61,11 @@ export type RunLog = {
   stream: "stdout" | "stderr" | "system";
   text: string;
 };
+export type RunSummary = Omit<RunRecord, "version"> & {
+  version: Omit<ExecutionVersion, "source"> & {
+    source: Omit<SourceSnapshot, "files">;
+  };
+};
 export type RunEvent = {
   kind: "runner-event";
   eventId: string;

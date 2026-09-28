@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExecutionVersion } from "@hero4hire/automation";
+import type { ServiceBusSender } from "@azure/service-bus";
+import type { ExecutionVersion, RunEvent } from "@hero4hire/automation";
 import type { ProjectRequest } from "@hero4hire/project";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test, vi } from "vitest";
 
 let directory: string;
 let server: Server;
@@ -83,6 +84,18 @@ beforeAll(async () => {
       res.end(JSON.stringify(value));
     };
     if (path === "/containers/create") {
+      expect(body.HostConfig.LogConfig).toEqual({
+        Type: "json-file",
+        Config: { "max-size": "20m", "max-file": "2", mode: "blocking" },
+      });
+      expect(body.HostConfig.Mounts).toContainEqual({
+        Type: "volume",
+        Source: "forge-local-runner-data",
+        Target: "/run/forge-output",
+        VolumeOptions: {
+          Subpath: `runs/${url.searchParams.get("name")?.replace("forge-run-", "")}/output`,
+        },
+      });
       const name = url.searchParams.get("name") || "";
       if (containers.has(name)) return respond({}, 409);
       creates++;
@@ -201,4 +214,61 @@ test("an admin retry finds the original creation version across failed cleanup a
   expect(await runners.previousVersion({ ...request, attempt: 3 })).toEqual(
     version,
   );
+});
+
+test("durable log capture recovers partial writes without reading Docker logs", async () => {
+  const id = await runners.startTask(
+    request,
+    "azure",
+    "Create",
+    "create",
+    4,
+    version,
+  );
+  const path = join(directory, "runs", id, "output", "logs.jsonl");
+  const entry = (text: string) =>
+    JSON.stringify({
+      timestamp: "2026-09-27T12:00:01Z",
+      stream: "stderr",
+      text,
+    });
+  await writeFile(
+    path,
+    `${entry("first diagnostic")}\n${entry("second diagnostic").slice(0, 15)}`,
+  );
+  const delivered: RunEvent[] = [];
+  const sender = {
+    sendMessages: async (message: { body: RunEvent }) => {
+      delivered.push(message.body);
+      await runners.acknowledgeRunnerEvent(message.body.eventId);
+    },
+  };
+  const stop = await runners.observeRunners(sender as ServiceBusSender);
+  try {
+    await vi.waitFor(
+      () =>
+        expect(
+          delivered
+            .filter((event) => event.run.id === id)
+            .flatMap((event) => event.logs),
+        ).toHaveLength(1),
+      { timeout: 2500 },
+    );
+    await appendFile(path, `${entry("second diagnostic").slice(15)}\n`);
+    await vi.waitFor(
+      () =>
+        expect(
+          delivered
+            .filter((event) => event.run.id === id)
+            .flatMap((event) => event.logs)
+            .map((log) => [log.sequence, log.text]),
+        ).toEqual([
+          [1, "first diagnostic"],
+          [2, "second diagnostic"],
+        ]),
+      { timeout: 2500 },
+    );
+  } finally {
+    stop();
+  }
 });

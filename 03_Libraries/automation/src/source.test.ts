@@ -139,6 +139,17 @@ test("a local source symlink cannot load files outside the approved source direc
   );
   await expect(loadDevelopmentSource(directory)).rejects.toThrow("escapes");
 });
+test("source snapshots are bounded by encoded bytes including the manifest", async () => {
+  const directory = await fixture();
+  await writeFile(join(directory, "scripts/create.sh"), "界".repeat(30_000));
+  await writeFile(
+    join(directory, "resources/group.bicep"),
+    "界".repeat(30_000),
+  );
+  await expect(loadDevelopmentSource(directory)).rejects.toThrow(
+    "snapshot is too large",
+  );
+});
 test("project tasks cannot accidentally run with privileged credentials", async () => {
   const source = await loadDevelopmentSource(await fixture());
   source.manifest.tasks[0].runner = "project";

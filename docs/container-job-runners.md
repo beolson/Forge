@@ -30,6 +30,11 @@ Each task has a stable run ID and Docker container name. Recovery inspects that
 container before creating or starting anything. Containers and their logs remain
 until a terminal run has been recorded and the configured retention period has
 elapsed. An unavailable execution is treated as uncertain, never blindly retried.
+Each local execution writes a durable, redacted JSONL log file before forwarding
+output to Docker. DBOS reads this file independently of Docker log rotation, so
+an orchestrator outage cannot rotate away uncaptured diagnostics. Local disk must
+accommodate output until retention removes completed log files and containers.
+Long lines are redacted in full before being split into bounded records.
 
 Azure and GitHub creation remain parallel. DBOS allows three total attempts for
 each task, with a configurable timeout defaulting to 30 minutes. The runner has no

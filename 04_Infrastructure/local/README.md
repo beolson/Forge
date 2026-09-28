@@ -85,8 +85,8 @@ has three total attempts and a default 30-minute timeout
 ## Persistent data
 
 PostgreSQL holds the `forge` database, including DBOS's durable workflow schema.
-`runner_data` stores pinned source/image versions, recovery records, and unacknowledged
-run events. `runner_credentials` stores provider secrets. Task containers are
+`runner_data` stores pinned source/image versions, recovery records, redacted log
+archives, and unacknowledged run events. `runner_credentials` stores provider secrets. Task containers are
 retained until completed output is captured and their retention period expires.
 Preserve runner data and pinned images to allow later rollback/admin retry.
 
