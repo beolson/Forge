@@ -1,0 +1,204 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ExecutionVersion } from "@hero4hire/automation";
+import type { ProjectRequest } from "@hero4hire/project";
+import { afterAll, beforeAll, expect, test } from "vitest";
+
+let directory: string;
+let server: Server;
+let runners: typeof import("./runners");
+const containers = new Map<
+  string,
+  {
+    Config: { Image: string; Labels: Record<string, string> };
+    State: {
+      Status: string;
+      Running: boolean;
+      ExitCode: number;
+      StartedAt: string;
+      FinishedAt: string;
+    };
+  }
+>();
+let creates = 0;
+let starts = 0;
+let loseCreate = false;
+let loseStart = false;
+const request: ProjectRequest = {
+  kind: "create-project",
+  projectId: "e513e0da-08e4-4f64-a111-bb6bb9cfdc38",
+  attempt: 1,
+  code: "ABCDE",
+  name: "Example",
+  description: "Example project",
+  repositoryName: "gh-abcde-example",
+};
+const version: ExecutionVersion = {
+  settings: {
+    azureSubscriptionId: "test-subscription",
+    azureRegion: "eastus",
+    githubOrganization: "example",
+  },
+  image: `sha256:${"a".repeat(64)}`,
+  source: {
+    repository: "example/Forge",
+    revision: "b".repeat(40),
+    origin: "github",
+    root: "04_Infrastructure/runners",
+    files: { "scripts/create.sh": "echo create\n" },
+    manifest: {
+      version: 1,
+      tasks: [
+        {
+          id: "azure-create",
+          name: "Create group",
+          runner: "privileged",
+          resource: "azure",
+          operation: "Create",
+          runtime: "bash",
+          entrypoint: "scripts/create.sh",
+          files: [],
+        },
+      ],
+    },
+  },
+};
+
+beforeAll(async () => {
+  directory = await mkdtemp(join(tmpdir(), "forge-runners-"));
+  process.env.RUNNER_DATA_DIRECTORY = directory;
+  process.env.DOCKER_SOCKET = join(directory, "docker.sock");
+  server = createServer(async (req, res) => {
+    const url = new URL(req.url || "/", "http://docker");
+    const path = url.pathname.replace("/v1.45", "");
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = chunks.length
+      ? JSON.parse(Buffer.concat(chunks).toString())
+      : null;
+    const respond = (value: unknown, status = 200) => {
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(value));
+    };
+    if (path === "/containers/create") {
+      const name = url.searchParams.get("name") || "";
+      if (containers.has(name)) return respond({}, 409);
+      creates++;
+      containers.set(name, {
+        Config: { Image: body.Image, Labels: body.Labels },
+        State: {
+          Status: "created",
+          Running: false,
+          ExitCode: 0,
+          StartedAt: "0001-01-01T00:00:00Z",
+          FinishedAt: "0001-01-01T00:00:00Z",
+        },
+      });
+      if (loseCreate) {
+        loseCreate = false;
+        req.socket.destroy();
+        return;
+      }
+      return respond({ Id: name }, 201);
+    }
+    const name = path.split("/")[2];
+    const container = containers.get(name);
+    if (!container) return respond({}, 404);
+    if (path.endsWith("/json")) return respond(container);
+    if (path.endsWith("/start")) {
+      starts++;
+      container.State.Status = "running";
+      container.State.Running = true;
+      container.State.StartedAt = "2026-09-27T12:00:00Z";
+      if (loseStart) {
+        loseStart = false;
+        req.socket.destroy();
+        return;
+      }
+      return respond(null);
+    }
+    return respond({}, 404);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(process.env.DOCKER_SOCKET, resolve);
+  });
+  runners = await import("./runners");
+});
+afterAll(async () => {
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await rm(directory, { recursive: true, force: true });
+});
+
+test("recovering a lost create response and replaying a task starts only one container", async () => {
+  const beforeCreates = creates;
+  const beforeStarts = starts;
+  loseCreate = true;
+  const id = await runners.startTask(
+    request,
+    "azure",
+    "Create",
+    "create",
+    1,
+    version,
+  );
+  expect(
+    await runners.startTask(request, "azure", "Create", "create", 1, version),
+  ).toBe(id);
+  expect(creates - beforeCreates).toBe(1);
+  expect(starts - beforeStarts).toBe(1);
+  expect(await runners.taskStatus(id)).toBe("running");
+});
+test("recovering a lost start response does not restart an execution", async () => {
+  const beforeStarts = starts;
+  loseStart = true;
+  const id = await runners.startTask(
+    request,
+    "azure",
+    "Create",
+    "create",
+    2,
+    version,
+  );
+  await runners.startTask(request, "azure", "Create", "create", 2, version);
+  expect(starts - beforeStarts).toBe(1);
+  const container = containers.get(`forge-run-${id}`);
+  if (!container) throw new Error("Expected execution");
+  container.State.Status = "exited";
+  container.State.Running = false;
+  container.State.ExitCode = 0;
+  container.State.FinishedAt = "2026-09-27T12:00:10Z";
+  expect(await runners.taskStatus(id)).toBe("succeeded");
+});
+test("an execution which disappeared after starting remains uncertain and is not recreated", async () => {
+  const id = await runners.startTask(
+    request,
+    "azure",
+    "Create",
+    "create",
+    3,
+    version,
+  );
+  await runners.taskStatus(id);
+  containers.delete(`forge-run-${id}`);
+  expect(await runners.taskStatus(id)).toBe("unknown");
+  const beforeCreates = creates;
+  await expect(
+    runners.startTask(request, "azure", "Create", "create", 3, version),
+  ).rejects.toThrow("uncertain");
+  expect(creates).toBe(beforeCreates);
+});
+test("an admin retry finds the original creation version across failed cleanup attempts", async () => {
+  await mkdir(join(directory, "versions"), { recursive: true });
+  await writeFile(
+    join(directory, "versions", `${request.projectId}-1.json`),
+    JSON.stringify(version),
+  );
+  await runners.initializeAttempt({ ...request, attempt: 2 });
+  await runners.initializeAttempt({ ...request, attempt: 3 });
+  expect(await runners.previousVersion({ ...request, attempt: 3 })).toEqual(
+    version,
+  );
+});

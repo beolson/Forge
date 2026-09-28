@@ -55,6 +55,20 @@ export async function database(): Promise<Pool> {
         attempt integer NOT NULL, status text NOT NULL, resource text, detail text NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now()
       );
+      ALTER TABLE forge_project_events ADD COLUMN IF NOT EXISTS admin_detail text;
+      CREATE TABLE IF NOT EXISTS forge_runs (
+        id text PRIMARY KEY, project_id uuid NOT NULL REFERENCES forge_projects(id),
+        revision integer NOT NULL, data jsonb NOT NULL, created_at timestamptz NOT NULL,
+        finished_at timestamptz
+      );
+      CREATE INDEX IF NOT EXISTS forge_runs_created ON forge_runs(created_at DESC, id);
+      CREATE TABLE IF NOT EXISTS forge_run_logs (
+        run_id text NOT NULL REFERENCES forge_runs(id), sequence integer NOT NULL,
+        timestamp text NOT NULL, stream text NOT NULL, text text NOT NULL,
+        received_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (run_id, sequence)
+      );
+      ALTER TABLE forge_run_logs ADD COLUMN IF NOT EXISTS arrival_id bigserial;
+      CREATE INDEX IF NOT EXISTS forge_run_logs_arrival ON forge_run_logs(run_id,arrival_id);
     `);
   })();
   try {
@@ -172,8 +186,9 @@ export async function listProjects(): Promise<{
     status: string;
     resource: string | null;
     detail: string;
+    admin_detail: string | null;
   }>(
-    "SELECT id,project_id,status,resource,detail FROM forge_project_events WHERE project_id = ANY($1::uuid[]) ORDER BY id",
+    "SELECT id,project_id,status,resource,detail,admin_detail FROM forge_project_events WHERE project_id = ANY($1::uuid[]) ORDER BY id",
     [result.rows.map((row) => row.id)],
   );
   const subscription = process.env.AZURE_SUBSCRIPTION_ID ?? "";
@@ -181,13 +196,29 @@ export async function listProjects(): Promise<{
   return {
     projects: result.rows.map((row) => ({
       ...row,
+      error: admin
+        ? row.error
+        : row.error
+          ? "Provisioning failed. An admin can investigate and retry."
+          : null,
       azureUrl: subscription
         ? `https://portal.azure.com/#@/resource/subscriptions/${encodeURIComponent(subscription)}/resourceGroups/${encodeURIComponent(row.resource_group_name)}/overview`
         : "",
       githubUrl: org
         ? `https://github.com/${encodeURIComponent(org)}/${encodeURIComponent(row.repository_name)}`
         : "",
-      events: events.rows.filter((event) => event.project_id === row.id),
+      events: events.rows
+        .filter((event) => event.project_id === row.id)
+        .map((event) => ({
+          id: event.id,
+          status: event.status,
+          resource: event.resource,
+          detail: admin
+            ? event.admin_detail || event.detail
+            : event.admin_detail !== null
+              ? event.detail
+              : `${event.resource === "azure" ? "Azure resource group: " : event.resource === "github" ? "GitHub repository: " : ""}${event.status.replaceAll("_", " ")}`,
+        })),
     })),
     admin,
   };
@@ -226,6 +257,14 @@ export async function retryProject(id: string): Promise<void> {
 }
 
 async function applyResult(message: ServiceBusReceivedMessage): Promise<void> {
+  if (message.body?.kind === "runner-event") {
+    const { applyRunEvent, notifyRun } = await import("./runs.server");
+    const changed = await transaction((client) =>
+      applyRunEvent(message.body, client),
+    );
+    if (changed !== null) notifyRun(message.body.run.id, changed);
+    return;
+  }
   const event = message.body as ProjectEvent;
   if (
     !event ||
@@ -247,17 +286,23 @@ async function applyResult(message: ServiceBusReceivedMessage): Promise<void> {
                     WHEN status='rolling_back' AND $3='provisioning' THEN status ELSE $3 END,
         error=CASE WHEN $3 IN ('failed','cleanup_failed') THEN $4 ELSE error END
        WHERE id=$1 AND attempt=$2 RETURNING id`,
-      [event.projectId, event.attempt, event.status, event.detail],
+      [
+        event.projectId,
+        event.attempt,
+        event.status,
+        event.adminDetail || event.detail,
+      ],
     );
     if (!updated.rowCount) return;
     await client.query(
-      "INSERT INTO forge_project_events (project_id,attempt,status,resource,detail) VALUES ($1,$2,$3,$4,$5)",
+      "INSERT INTO forge_project_events (project_id,attempt,status,resource,detail,admin_detail) VALUES ($1,$2,$3,$4,$5,$6)",
       [
         event.projectId,
         event.attempt,
         event.status,
         event.resource ?? null,
         event.detail,
+        event.adminDetail || event.detail,
       ],
     );
     visible = true;
@@ -317,7 +362,14 @@ export async function ensureMessaging(): Promise<void> {
     const receiver = client.createReceiver("forge-results");
     const sender = client.createSender("forge-requests");
     receiver.subscribe({
-      processMessage: applyResult,
+      processMessage: async (message) => {
+        await applyResult(message);
+        if (message.body?.kind === "runner-event")
+          await sender.sendMessages({
+            messageId: `ack:${message.body.eventId}:${Math.floor(Date.now() / 30_000)}`,
+            body: { kind: "runner-ack", eventId: message.body.eventId },
+          });
+      },
       processError: async (args) => {
         console.error("Forge result consumer:", args.error);
       },
@@ -336,6 +388,24 @@ export async function ensureMessaging(): Promise<void> {
     };
     await dispatch();
     setInterval(dispatch, 2000).unref();
+    const retentionDays = Number(process.env.RUNNER_LOG_RETENTION_DAYS || 90);
+    if (!Number.isInteger(retentionDays) || retentionDays < 1)
+      throw new Error("RUNNER_LOG_RETENTION_DAYS must be a positive integer");
+    const prune = () =>
+      pool.query(
+        "DELETE FROM forge_run_logs l USING forge_runs r WHERE l.run_id=r.id AND r.finished_at < now() - $1 * interval '1 day'",
+        [retentionDays],
+      );
+    void prune().catch(() =>
+      console.error("Run log retention temporarily unavailable"),
+    );
+    setInterval(
+      () =>
+        void prune().catch(() =>
+          console.error("Run log retention temporarily unavailable"),
+        ),
+      3_600_000,
+    ).unref();
   })().catch((error) => {
     messaging = undefined;
     throw error;

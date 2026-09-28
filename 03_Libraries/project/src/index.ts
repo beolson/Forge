@@ -23,6 +23,7 @@ export type ProjectEvent = {
   status: ProjectStatus;
   resource?: Resource;
   detail: string;
+  adminDetail?: string;
 };
 
 export function parseProjectInput(value: ProjectInput): ProjectInput {

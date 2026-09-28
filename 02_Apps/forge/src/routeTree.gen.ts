@@ -10,15 +10,30 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AdminRunsRouteImport } from './routes/admin.runs'
+import { Route as AdminTasksRouteImport } from './routes/admin.tasks'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as AuthErrorRouteImport } from './routes/auth.error'
 import { Route as AuthLoginRouteImport } from './routes/auth.login'
 import { Route as AuthSignedOutRouteImport } from './routes/auth.signed-out'
+import { Route as AdminRunsIndexRouteImport } from './routes/admin.runs.index'
+import { Route as AdminRunsRunIdRouteImport } from './routes/admin.runs.$runId'
 import { Route as ApiProjectsEventsRouteImport } from './routes/api.projects.events'
+import { Route as ApiAdminRunsEventsRouteImport } from './routes/api.admin.runs.events'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminRunsRoute = AdminRunsRouteImport.update({
+  id: '/admin/runs',
+  path: '/admin/runs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminTasksRoute = AdminTasksRouteImport.update({
+  id: '/admin/tasks',
+  path: '/admin/tasks',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthCallbackRoute = AuthCallbackRouteImport.update({
@@ -41,71 +56,117 @@ const AuthSignedOutRoute = AuthSignedOutRouteImport.update({
   path: '/auth/signed-out',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminRunsIndexRoute = AdminRunsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminRunsRoute,
+} as any)
+const AdminRunsRunIdRoute = AdminRunsRunIdRouteImport.update({
+  id: '/$runId',
+  path: '/$runId',
+  getParentRoute: () => AdminRunsRoute,
+} as any)
 const ApiProjectsEventsRoute = ApiProjectsEventsRouteImport.update({
   id: '/api/projects/events',
   path: '/api/projects/events',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminRunsEventsRoute = ApiAdminRunsEventsRouteImport.update({
+  id: '/api/admin/runs/events',
+  path: '/api/admin/runs/events',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/admin/runs': typeof AdminRunsRouteWithChildren
+  '/admin/tasks': typeof AdminTasksRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/auth/error': typeof AuthErrorRoute
   '/auth/login': typeof AuthLoginRoute
   '/auth/signed-out': typeof AuthSignedOutRoute
+  '/admin/runs/$runId': typeof AdminRunsRunIdRoute
   '/api/projects/events': typeof ApiProjectsEventsRoute
+  '/admin/runs/': typeof AdminRunsIndexRoute
+  '/api/admin/runs/events': typeof ApiAdminRunsEventsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/admin/tasks': typeof AdminTasksRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/auth/error': typeof AuthErrorRoute
   '/auth/login': typeof AuthLoginRoute
   '/auth/signed-out': typeof AuthSignedOutRoute
+  '/admin/runs/$runId': typeof AdminRunsRunIdRoute
   '/api/projects/events': typeof ApiProjectsEventsRoute
+  '/admin/runs': typeof AdminRunsIndexRoute
+  '/api/admin/runs/events': typeof ApiAdminRunsEventsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/admin/runs': typeof AdminRunsRouteWithChildren
+  '/admin/tasks': typeof AdminTasksRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/auth/error': typeof AuthErrorRoute
   '/auth/login': typeof AuthLoginRoute
   '/auth/signed-out': typeof AuthSignedOutRoute
+  '/admin/runs/$runId': typeof AdminRunsRunIdRoute
   '/api/projects/events': typeof ApiProjectsEventsRoute
+  '/admin/runs/': typeof AdminRunsIndexRoute
+  '/api/admin/runs/events': typeof ApiAdminRunsEventsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/admin/runs'
+    | '/admin/tasks'
     | '/auth/callback'
     | '/auth/error'
     | '/auth/login'
     | '/auth/signed-out'
+    | '/admin/runs/$runId'
     | '/api/projects/events'
+    | '/admin/runs/'
+    | '/api/admin/runs/events'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/admin/tasks'
     | '/auth/callback'
     | '/auth/error'
     | '/auth/login'
     | '/auth/signed-out'
+    | '/admin/runs/$runId'
     | '/api/projects/events'
+    | '/admin/runs'
+    | '/api/admin/runs/events'
   id:
     | '__root__'
     | '/'
+    | '/admin/runs'
+    | '/admin/tasks'
     | '/auth/callback'
     | '/auth/error'
     | '/auth/login'
     | '/auth/signed-out'
+    | '/admin/runs/$runId'
     | '/api/projects/events'
+    | '/admin/runs/'
+    | '/api/admin/runs/events'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdminRunsRoute: typeof AdminRunsRouteWithChildren
+  AdminTasksRoute: typeof AdminTasksRoute
   AuthCallbackRoute: typeof AuthCallbackRoute
   AuthErrorRoute: typeof AuthErrorRoute
   AuthLoginRoute: typeof AuthLoginRoute
   AuthSignedOutRoute: typeof AuthSignedOutRoute
   ApiProjectsEventsRoute: typeof ApiProjectsEventsRoute
+  ApiAdminRunsEventsRoute: typeof ApiAdminRunsEventsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -115,6 +176,20 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/runs': {
+      id: '/admin/runs'
+      path: '/admin/runs'
+      fullPath: '/admin/runs'
+      preLoaderRoute: typeof AdminRunsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/tasks': {
+      id: '/admin/tasks'
+      path: '/admin/tasks'
+      fullPath: '/admin/tasks'
+      preLoaderRoute: typeof AdminTasksRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auth/callback': {
@@ -145,6 +220,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthSignedOutRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/runs/': {
+      id: '/admin/runs/'
+      path: '/'
+      fullPath: '/admin/runs/'
+      preLoaderRoute: typeof AdminRunsIndexRouteImport
+      parentRoute: typeof AdminRunsRoute
+    }
+    '/admin/runs/$runId': {
+      id: '/admin/runs/$runId'
+      path: '/$runId'
+      fullPath: '/admin/runs/$runId'
+      preLoaderRoute: typeof AdminRunsRunIdRouteImport
+      parentRoute: typeof AdminRunsRoute
+    }
     '/api/projects/events': {
       id: '/api/projects/events'
       path: '/api/projects/events'
@@ -152,16 +241,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiProjectsEventsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/runs/events': {
+      id: '/api/admin/runs/events'
+      path: '/api/admin/runs/events'
+      fullPath: '/api/admin/runs/events'
+      preLoaderRoute: typeof ApiAdminRunsEventsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
+interface AdminRunsRouteChildren {
+  AdminRunsRunIdRoute: typeof AdminRunsRunIdRoute
+  AdminRunsIndexRoute: typeof AdminRunsIndexRoute
+}
+
+const AdminRunsRouteChildren: AdminRunsRouteChildren = {
+  AdminRunsRunIdRoute: AdminRunsRunIdRoute,
+  AdminRunsIndexRoute: AdminRunsIndexRoute,
+}
+
+const AdminRunsRouteWithChildren = AdminRunsRoute._addFileChildren(
+  AdminRunsRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdminRunsRoute: AdminRunsRouteWithChildren,
+  AdminTasksRoute: AdminTasksRoute,
   AuthCallbackRoute: AuthCallbackRoute,
   AuthErrorRoute: AuthErrorRoute,
   AuthLoginRoute: AuthLoginRoute,
   AuthSignedOutRoute: AuthSignedOutRoute,
   ApiProjectsEventsRoute: ApiProjectsEventsRoute,
+  ApiAdminRunsEventsRoute: ApiAdminRunsEventsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

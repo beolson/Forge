@@ -20,10 +20,11 @@ The project-creation vertical slice is described in [docs/project-provisioning.m
   platform/
     bootstrap/       # First-time setup, including Azure CLI scripts
     bicep/           # Infrastructure that runs Forge itself
-  semaphore/
-    scripts/         # Deployment and provisioning scripts
-    templates/       # Semaphore task template definitions
-    resources/       # Other resources published to Semaphore
+  runners/
+    scripts/         # Versioned provisioning and rollback scripts
+    resources/       # Bicep templates
+    tasks.json       # Approved task manifest
+    execute.py       # Trusted container entrypoint
   local/             # Docker Compose stack for local development and debugging
 ```
 
@@ -32,9 +33,11 @@ Each module gets its own directory. Bicep modules are published to Azure Contain
 Registry. Terraform modules can initially be consumed from version-pinned Git
 paths; a private Terraform module registry can be added when needed. `platform`
 is for Forge's own infrastructure and may use resources outside the catalog.
-`semaphore` contains the versioned assets used by Semaphore to execute deployments.
-The local stack mounts this folder into Semaphore and registers it as a repository
-when you run `just up`.
+`runners` contains the approved manifest, scripts, and Bicep templates. DBOS starts
+isolated Docker executions locally and loads approved source from GitHub at a pinned
+commit. See [the runner design](docs/container-job-runners.md) and
+[credential setup](docs/project-provisioning.md#script-loading-github-app).
+Admins inspect scripts and runs in Forge itself.
 
 ## Customer deployment flow
 
@@ -52,7 +55,7 @@ flowchart LR
     D -->|Repository-scoped token| E[GitHub App: fetch exact commit]
     E --> D
     D --> F[Validate approved modules]
-    F -->|Valid| G[Semaphore: apply deployment]
+    F -->|Valid| G[Provisioning runner: apply deployment]
     F -->|Invalid| H[Final result]
     G --> H
     H -->|Correlated reply| I[Service Bus result queue]
