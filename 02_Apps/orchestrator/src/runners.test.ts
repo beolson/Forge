@@ -1,4 +1,12 @@
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +35,7 @@ let creates = 0;
 let starts = 0;
 let loseCreate = false;
 let loseStart = false;
+let catalogInspections = 0;
 const request: ProjectRequest = {
   kind: "create-project",
   projectId: "e513e0da-08e4-4f64-a111-bb6bb9cfdc38",
@@ -43,27 +52,51 @@ const version: ExecutionVersion = {
     githubOrganization: "example",
   },
   image: `sha256:${"a".repeat(64)}`,
-  source: {
-    repository: "example/Forge",
-    revision: "b".repeat(40),
-    origin: "github",
-    root: "04_Infrastructure/runners",
-    files: { "scripts/create.sh": "echo create\n" },
-    manifest: {
-      version: 1,
-      tasks: [
-        {
-          id: "azure-create",
-          name: "Create group",
-          runner: "privileged",
-          resource: "azure",
-          operation: "Create",
-          runtime: "bash",
-          entrypoint: "scripts/create.sh",
-          files: [],
-        },
-      ],
-    },
+  manifest: {
+    version: 1,
+    tasks: [
+      {
+        id: "azure-create",
+        name: "Create group",
+        runner: "privileged",
+        resource: "azure",
+        operation: "Create",
+        runtime: "bun",
+        entrypoint: "scripts/bicep.js",
+        action: "deploy",
+        bicepFile: "resources/project-resource-group.bicep",
+      },
+      {
+        id: "azure-delete",
+        name: "Delete group",
+        runner: "privileged",
+        resource: "azure",
+        operation: "Delete",
+        runtime: "bun",
+        entrypoint: "scripts/bicep.js",
+        action: "delete",
+      },
+      {
+        id: "github-create",
+        name: "Create repository",
+        runner: "privileged",
+        resource: "github",
+        operation: "Create",
+        runtime: "bun",
+        entrypoint: "scripts/github.js",
+        action: "create",
+      },
+      {
+        id: "github-delete",
+        name: "Delete repository",
+        runner: "privileged",
+        resource: "github",
+        operation: "Delete",
+        runtime: "bun",
+        entrypoint: "scripts/github.js",
+        action: "delete",
+      },
+    ],
   },
 };
 
@@ -83,6 +116,28 @@ beforeAll(async () => {
       res.writeHead(status, { "Content-Type": "application/json" });
       res.end(JSON.stringify(value));
     };
+    if (path.startsWith("/images/")) return respond({ Id: version.image });
+    if (
+      path === "/containers/create" &&
+      url.searchParams.get("name")?.startsWith("forge-catalog-")
+    ) {
+      const name = url.searchParams.get("name") as string;
+      expect(body.Image).toBe(version.image);
+      expect(body.HostConfig.NetworkMode).toBe("none");
+      expect(body.HostConfig.Mounts).toBeUndefined();
+      catalogInspections++;
+      containers.set(name, {
+        Config: { Image: body.Image, Labels: {} },
+        State: {
+          Status: "created",
+          Running: false,
+          ExitCode: 0,
+          StartedAt: "",
+          FinishedAt: "",
+        },
+      });
+      return respond({ Id: name }, 201);
+    }
     if (path === "/containers/create") {
       expect(body.HostConfig.LogConfig).toEqual({
         Type: "json-file",
@@ -119,6 +174,22 @@ beforeAll(async () => {
     const name = path.split("/")[2];
     const container = containers.get(name);
     if (!container) return respond({}, 404);
+    if (req.method === "DELETE") {
+      containers.delete(name);
+      return respond(null);
+    }
+    if (name.startsWith("forge-catalog-")) {
+      if (path.endsWith("/start")) return respond(null);
+      if (path.endsWith("/wait")) return respond({ StatusCode: 0 });
+      if (path.endsWith("/logs")) {
+        const payload = Buffer.from(JSON.stringify(version.manifest));
+        const header = Buffer.alloc(8);
+        header[0] = 1;
+        header.writeUInt32BE(payload.length, 4);
+        res.end(Buffer.concat([header, payload]));
+        return;
+      }
+    }
     if (path.endsWith("/json")) return respond(container);
     if (path.endsWith("/start")) {
       starts++;
@@ -271,4 +342,55 @@ test("durable log capture recovers partial writes without reading Docker logs", 
   } finally {
     stop();
   }
+});
+
+test("an attempt pins the catalog from its image once and retains original settings", async () => {
+  const project = {
+    ...request,
+    projectId: "c513e0da-08e4-4f64-a111-bb6bb9cfdc38",
+  };
+  process.env.AZURE_SUBSCRIPTION_ID = "original-subscription";
+  process.env.AZURE_REGION = "eastus";
+  process.env.GITHUB_ORG = "original-org";
+  const before = catalogInspections;
+  const pinned = await runners.pinVersion(project);
+  expect(pinned.image).toBe(version.image);
+  expect(pinned.manifest).toEqual(version.manifest);
+  expect(pinned).not.toHaveProperty("source");
+  process.env.AZURE_SUBSCRIPTION_ID = "changed-subscription";
+  expect(await runners.pinVersion(project)).toEqual(pinned);
+  expect(catalogInspections - before).toBe(1);
+  expect(
+    [...containers.keys()].some((name) => name.startsWith("forge-catalog-")),
+  ).toBe(false);
+});
+
+test("delete runs the packaged handler with concrete ownership arguments and no source snapshot", async () => {
+  const id = await runners.startTask(
+    request,
+    "azure",
+    "Delete",
+    "failure",
+    1,
+    version,
+  );
+  const work = join(directory, "runs", id, "work");
+  expect((await readdir(work)).sort()).toEqual([
+    "arguments.json",
+    "request.json",
+    "settings.json",
+    "task.json",
+  ]);
+  const args = JSON.parse(await readFile(join(work, "arguments.json"), "utf8"));
+  expect(args[0]).toBe("delete");
+  expect(JSON.parse(args[1])).toEqual({
+    resourceGroup: "az-abcde-resgp",
+    projectId: request.projectId,
+  });
+  await expect(
+    runners.startTask(request, "azure", "Delete", "failure", 1, {
+      ...version,
+      settings: { ...version.settings, azureSubscriptionId: "changed" },
+    }),
+  ).rejects.toThrow("version");
 });

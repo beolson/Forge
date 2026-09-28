@@ -5,7 +5,7 @@ targetScope = 'subscription'
 @maxLength(5)
 param appCode string
 
-@description('The Forge project ID used to identify ownership during retries and rollback.')
+@description('The Forge project ID used to identify ownership during retries and deletion.')
 @minLength(36)
 @maxLength(36)
 param projectId string

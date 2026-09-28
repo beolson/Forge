@@ -15,12 +15,13 @@ import type { ServiceBusSender } from "@azure/service-bus";
 import {
   type ExecutionVersion,
   type Operation,
+  parseManifest,
   type RunEvent,
   type RunLog,
   type RunRecord,
+  taskArguments,
   taskFor,
 } from "@hero4hire/automation";
-import { loadSource } from "@hero4hire/automation/source";
 import type { ProjectRequest, Resource } from "@hero4hire/project";
 import { DockerError, decodeDockerLogs, docker, dockerBytes } from "./docker";
 
@@ -59,15 +60,57 @@ export async function initializeAttempt(
   }
 }
 
+// Read the catalog from the exact image that will execute it, without provider credentials.
+async function imageManifest(image: string) {
+  const name = `forge-catalog-${randomUUID()}`;
+  try {
+    await docker("POST", `/containers/create?name=${name}`, {
+      Image: image,
+      Entrypoint: ["bun", "/opt/forge/src/catalog.js"],
+      HostConfig: {
+        Init: true,
+        ReadonlyRootfs: true,
+        NetworkMode: "none",
+        CapDrop: ["ALL"],
+        SecurityOpt: ["no-new-privileges:true"],
+        Memory: 268_435_456,
+        NanoCpus: 1_000_000_000,
+      },
+    });
+    await docker("POST", `/containers/${name}/start`);
+    const result = await docker<{ StatusCode: number }>(
+      "POST",
+      `/containers/${name}/wait?condition=not-running`,
+    );
+    if (result.StatusCode !== 0)
+      throw new Error("Provisioner image catalog could not be read");
+    const bytes = await dockerBytes(
+      "GET",
+      `/containers/${name}/logs?stdout=true&stderr=true`,
+    );
+    if (bytes.length > 180_000)
+      throw new Error("Provisioner image catalog is too large");
+    const manifest = parseManifest(JSON.parse(decodeDockerLogs(bytes)));
+    for (const resource of ["azure", "github"] as const)
+      for (const operation of ["Create", "Delete"] as const)
+        taskFor(manifest, resource, operation);
+    return manifest;
+  } finally {
+    // Includes recovery of a lost create response, using the unique inspection name.
+    try {
+      await docker("DELETE", `/containers/${name}?force=true`);
+    } catch {}
+  }
+}
+
 export async function pinVersion(
   request: ProjectRequest,
 ): Promise<ExecutionVersion> {
   const existing = await readJSON<ExecutionVersion>(versionPath(request));
   if (existing) return existing;
-  const source = await loadSource();
   const image = await docker<{ Id: string }>(
     "GET",
-    `/images/${encodeURIComponent(process.env.RUNNER_IMAGE || "forge-runner:local")}/json`,
+    `/images/${encodeURIComponent(process.env.RUNNER_IMAGE || "forge-provisioner:local")}/json`,
   );
   if (!/^sha256:[a-f0-9]{64}$/.test(image.Id))
     throw new Error("Invalid runner image ID");
@@ -80,7 +123,8 @@ export async function pinVersion(
     throw new Error(
       "Runner subscription, region, and GitHub organization must be configured",
     );
-  const version = { source, image: image.Id, settings };
+  const manifest = await imageManifest(image.Id);
+  const version = { manifest, image: image.Id, settings };
   await saveJSON(versionPath(request), version);
   return version;
 }
@@ -96,7 +140,7 @@ export async function previousVersion(
       );
     } catch {
       throw new Error(
-        "The previous attempt's source version is unavailable; admin investigation is required",
+        "The previous attempt's provisioner version is unavailable; admin investigation is required",
       );
     }
     if (version) return version;
@@ -163,14 +207,10 @@ export async function startTask(
 ): Promise<string> {
   const id = runId(request, resource, operation, phase, attempt);
   const container = `forge-run-${id}`;
-  const task = taskFor(version.source, resource, operation);
+  const task = taskFor(version.manifest, resource, operation);
   let record = await readJSON<RunRecord>(runPath(id));
   let current = await inspect(container);
-  if (
-    record &&
-    (record.version.image !== version.image ||
-      record.version.source.revision !== version.source.revision)
-  )
+  if (record && JSON.stringify(record.version) !== JSON.stringify(version))
     throw new Error("Run version does not match its recovery record");
   if (!record && current)
     throw new Error("An execution exists without its recovery record");
@@ -180,11 +220,9 @@ export async function startTask(
     await mkdir(output, { recursive: true });
     await chmod(output, 0o777);
     await mkdir(work, { recursive: true });
-    for (const [path, text] of Object.entries(version.source.files)) {
-      await mkdir(dirname(join(work, path)), { recursive: true });
-      await writeFile(join(work, path), text, { mode: 0o644 });
-    }
     await saveJSON(join(work, "request.json"), request);
+    const args = taskArguments(task, request, version.settings);
+    await saveJSON(join(work, "arguments.json"), args);
     await saveJSON(join(work, "task.json"), task);
     await saveJSON(join(work, "settings.json"), version.settings);
     record = {
@@ -196,6 +234,7 @@ export async function startTask(
       phase,
       task,
       parameters: request,
+      arguments: args,
       version,
       container,
       status: "queued",
@@ -342,7 +381,7 @@ export async function taskStatus(id: string): Promise<RunRecord["status"]> {
             : `Task ended ${status} with exit code ${record.exitCode}`;
     }
     await saveJSON(runPath(id), record);
-    // Event delivery is asynchronous; a messaging outage cannot cause rollback.
+    // Event delivery is asynchronous; a messaging outage cannot cause resource deletion.
     await event(record);
   }
   return status;

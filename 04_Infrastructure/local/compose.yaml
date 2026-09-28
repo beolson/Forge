@@ -60,15 +60,7 @@ services:
       AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID in .env}
       GITHUB_ORG: ${GITHUB_ORG:?Set GITHUB_ORG in .env}
       RUNNER_LOG_RETENTION_DAYS: ${RUNNER_LOG_RETENTION_DAYS:-90}
-      AUTOMATION_REPOSITORY: ${AUTOMATION_REPOSITORY:-beolson/Forge}
-      AUTOMATION_GITHUB_APP_ID: ${AUTOMATION_GITHUB_APP_ID:-}
-      AUTOMATION_GITHUB_INSTALLATION_ID: ${AUTOMATION_GITHUB_INSTALLATION_ID:-}
-      AUTOMATION_GITHUB_PRIVATE_KEY_FILE: /run/secrets/source-app.pem
-      AUTOMATION_SOURCE_DIRECTORY: ${AUTOMATION_SOURCE_DIRECTORY:-}
       SERVICEBUS_CONNECTION_STRING: Endpoint=sb://servicebus-emulator;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
-    volumes:
-      - ${AUTOMATION_GITHUB_PRIVATE_KEY_PATH:-/dev/null}:/run/secrets/source-app.pem:ro
-      - ../runners:/approved-source:ro
     ports:
       - "127.0.0.1:5321:3000"
     depends_on:
@@ -87,23 +79,16 @@ services:
       SERVICEBUS_CONNECTION_STRING: Endpoint=sb://servicebus-emulator;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
       RUNNER_TASK_TIMEOUT_MS: ${RUNNER_TASK_TIMEOUT_MS:-1800000}
       RUNNER_LOG_RETENTION_DAYS: ${RUNNER_LOG_RETENTION_DAYS:-90}
-      RUNNER_IMAGE: forge-runner:local
+      RUNNER_IMAGE: forge-provisioner:local
       AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID in .env}
       AZURE_REGION: ${AZURE_REGION:?Set AZURE_REGION in .env}
       GITHUB_ORG: ${GITHUB_ORG:?Set GITHUB_ORG in .env}
       RUNNER_DATA_VOLUME: forge-local-runner-data
       RUNNER_CREDENTIAL_VOLUME: forge-local-runner-credentials
       RUNNER_NETWORK: forge-local_default
-      AUTOMATION_REPOSITORY: ${AUTOMATION_REPOSITORY:-beolson/Forge}
-      AUTOMATION_GITHUB_APP_ID: ${AUTOMATION_GITHUB_APP_ID:-}
-      AUTOMATION_GITHUB_INSTALLATION_ID: ${AUTOMATION_GITHUB_INSTALLATION_ID:-}
-      AUTOMATION_GITHUB_PRIVATE_KEY_FILE: /run/secrets/source-app.pem
-      AUTOMATION_SOURCE_DIRECTORY: ${AUTOMATION_SOURCE_DIRECTORY:-}
     volumes:
       - runner_data:/var/lib/forge/runners
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${AUTOMATION_GITHUB_PRIVATE_KEY_PATH:-/dev/null}:/run/secrets/source-app.pem:ro
-      - ../runners:/approved-source:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -115,9 +100,10 @@ services:
         condition: service_completed_successfully
 
   runner-image:
-    image: forge-runner:local
+    image: forge-provisioner:local
     build:
-      context: ../runners
+      context: ../..
+      dockerfile: 02_Apps/forge.provisioner/Dockerfile
     entrypoint: ["/bin/true"]
 
   runner-credentials:

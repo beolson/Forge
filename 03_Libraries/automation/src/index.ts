@@ -1,34 +1,47 @@
 import type { ProjectRequest, Resource } from "@hero4hire/project";
 
 export type RunnerProfile = "privileged" | "project";
-export type Operation = "Create" | "Rollback";
-export type Task = {
+export type Operation = "Create" | "Delete";
+type TaskBase = {
   id: string;
   name: string;
   runner: RunnerProfile;
-  resource: Resource;
   operation: Operation;
-  runtime: "bash" | "python";
-  entrypoint: string;
-  files: string[];
+  runtime: "bun";
 };
+export type Task = TaskBase &
+  (
+    | {
+        resource: "azure";
+        entrypoint: "scripts/bicep.js";
+        action: "deploy";
+        bicepFile: string;
+      }
+    | { resource: "azure"; entrypoint: "scripts/bicep.js"; action: "delete" }
+    | {
+        resource: "github";
+        entrypoint: "scripts/github.js";
+        action: "create" | "delete";
+      }
+  );
 export type TaskManifest = { version: 1; tasks: Task[] };
-export type SourceSnapshot = {
-  repository: string;
-  revision: string;
-  origin: "github" | "development";
-  root: string;
-  manifest: TaskManifest;
-  files: Record<string, string>;
+export type ProviderSettings = {
+  azureSubscriptionId: string;
+  azureRegion: string;
+  githubOrganization: string;
 };
 export type ExecutionVersion = {
-  source: SourceSnapshot;
+  manifest: TaskManifest;
   image: string;
-  settings: {
-    azureSubscriptionId: string;
-    azureRegion: string;
-    githubOrganization: string;
-  };
+  settings: ProviderSettings;
+};
+export type AzureOwnership = { resourceGroup: string; projectId: string };
+export type BicepArguments = {
+  scope: "subscription";
+  deploymentName: string;
+  location: string;
+  parameters: Record<string, unknown>;
+  ownership: AzureOwnership;
 };
 export type RunStatus =
   | "queued"
@@ -46,6 +59,7 @@ export type RunRecord = {
   phase: string;
   task: Task;
   parameters: ProjectRequest;
+  arguments: string[];
   version: ExecutionVersion;
   container: string;
   status: RunStatus;
@@ -61,11 +75,7 @@ export type RunLog = {
   stream: "stdout" | "stderr" | "system";
   text: string;
 };
-export type RunSummary = Omit<RunRecord, "version"> & {
-  version: Omit<ExecutionVersion, "source"> & {
-    source: Omit<SourceSnapshot, "files">;
-  };
-};
+export type RunSummary = RunRecord;
 export type RunEvent = {
   kind: "runner-event";
   eventId: string;
@@ -73,11 +83,11 @@ export type RunEvent = {
   logs: RunLog[];
 };
 
-export function safeSourcePath(value: unknown): value is string {
+export function safeResourcePath(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length < 200 &&
-    /^[A-Za-z0-9_.\-/]+$/.test(value) &&
+    /^resources\/[A-Za-z0-9_.\-/]+\.bicep$/.test(value) &&
     value
       .split("/")
       .every((part) => part !== "" && part !== "." && part !== "..")
@@ -106,13 +116,16 @@ export function parseManifest(value: unknown): TaskManifest {
       typeof task.name !== "string" ||
       task.name.length > 100 ||
       !["privileged", "project"].includes(task.runner) ||
-      !["azure", "github"].includes(task.resource) ||
-      !["Create", "Rollback"].includes(task.operation) ||
-      !["bash", "python"].includes(task.runtime) ||
-      !safeSourcePath(task.entrypoint) ||
-      !Array.isArray(task.files) ||
-      task.files.length > 30 ||
-      !task.files.every(safeSourcePath) ||
+      task.runtime !== "bun" ||
+      !["Create", "Delete"].includes(task.operation) ||
+      !(task.resource === "azure"
+        ? task.entrypoint === "scripts/bicep.js" &&
+          (task.operation === "Create"
+            ? task.action === "deploy" && safeResourcePath(task.bicepFile)
+            : task.action === "delete")
+        : task.resource === "github" &&
+          task.entrypoint === "scripts/github.js" &&
+          task.action === task.operation.toLowerCase()) ||
       ids.has(task.id) ||
       operations.has(`${task.resource}:${task.operation}`)
     ) {
@@ -125,16 +138,40 @@ export function parseManifest(value: unknown): TaskManifest {
 }
 
 export function taskFor(
-  source: SourceSnapshot,
+  manifest: TaskManifest,
   resource: Resource,
   operation: Operation,
 ): Task {
-  const task = source.manifest.tasks.find(
+  const task = manifest.tasks.find(
     (task) => task.resource === resource && task.operation === operation,
   );
-  if (!task) throw new Error(`No approved ${resource} ${operation} task`);
-  // The project profile intentionally has no provisioning credentials in this slice.
+  if (!task) throw new Error(`No packaged ${resource} ${operation} task`);
   if (task.runner !== "privileged")
     throw new Error("Project-scoped tasks are not enabled yet");
   return task;
+}
+
+export function taskArguments(
+  task: Task,
+  project: ProjectRequest,
+  settings: ProviderSettings,
+): string[] {
+  if (task.resource === "github") return [task.action, JSON.stringify(project)];
+  const ownership: AzureOwnership = {
+    resourceGroup: `az-${project.code.toLowerCase()}-resgp`,
+    projectId: project.projectId,
+  };
+  if (task.action === "delete") return ["delete", JSON.stringify(ownership)];
+  const args: BicepArguments = {
+    scope: "subscription",
+    deploymentName: `az-${project.code.toLowerCase()}-rgdep`,
+    location: settings.azureRegion,
+    parameters: {
+      appCode: project.code,
+      projectId: project.projectId,
+      location: settings.azureRegion,
+    },
+    ownership,
+  };
+  return ["deploy", task.bicepFile, JSON.stringify(args)];
 }

@@ -2,7 +2,6 @@ import type { RunLog } from "@hero4hire/automation";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { AdminHeader } from "@/components/admin-header";
-import { SourceViewer } from "@/components/source-viewer";
 import { getRun, getRunLogs } from "@/lib/runs.functions";
 
 export const Route = createFileRoute("/admin/runs/$runId")({
@@ -166,14 +165,14 @@ function RunDetail() {
               </section>
             </section>
             <section>
-              <h2 className="mb-3 text-xl font-semibold">
-                Scripts used by this run
-              </h2>
-              <SourceViewer
-                key={run.id}
-                source={run.version.source}
-                initialPath={run.task.entrypoint}
-              />
+              <h2 className="mb-3 text-xl font-semibold">Task configuration</h2>
+              <pre className="overflow-auto rounded border bg-muted p-4 text-xs">
+                {JSON.stringify(
+                  { task: run.task, arguments: run.arguments },
+                  null,
+                  2,
+                )}
+              </pre>
             </section>
           </>
         )}

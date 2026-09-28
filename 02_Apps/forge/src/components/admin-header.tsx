@@ -11,7 +11,7 @@ export function AdminHeader({ title }: { title: string }) {
           Provisioning runs
         </Link>
         <Link to="/admin/tasks" className="underline">
-          Scripts
+          Tasks
         </Link>
       </nav>
       <h1 className="text-3xl font-semibold">{title}</h1>

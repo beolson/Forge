@@ -11,7 +11,7 @@ export type Resource = "azure" | "github";
 export type ProjectStatus =
   | "queued"
   | "provisioning"
-  | "rolling_back"
+  | "deleting"
   | "ready"
   | "failed"
   | "cleanup_failed";

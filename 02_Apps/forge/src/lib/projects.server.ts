@@ -283,7 +283,7 @@ async function applyResult(message: ServiceBusReceivedMessage): Promise<void> {
     const updated = await client.query(
       `UPDATE forge_projects SET
         status=CASE WHEN status IN ('ready','failed','cleanup_failed') THEN status
-                    WHEN status='rolling_back' AND $3='provisioning' THEN status ELSE $3 END,
+                    WHEN status='deleting' AND $3='provisioning' THEN status ELSE $3 END,
         error=CASE WHEN $3 IN ('failed','cleanup_failed') THEN $4 ELSE error END
        WHERE id=$1 AND attempt=$2 RETURNING id`,
       [
@@ -337,7 +337,7 @@ async function dispatchOutbox(
      WHERE o.sent_at < now() - interval '1 hour'
        AND (o.last_requeued_at IS NULL OR o.last_requeued_at < now() - interval '1 hour')
        AND p.attempt=(o.payload->>'attempt')::integer
-       AND p.status IN ('queued','provisioning','rolling_back')
+       AND p.status IN ('queued','provisioning','deleting')
      ORDER BY o.id LIMIT 20`,
   );
   for (const row of stale.rows) {

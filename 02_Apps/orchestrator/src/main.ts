@@ -41,7 +41,7 @@ async function emit(
     resource === "azure" ? "Azure resource group" : "GitHub repository";
   const publicDetail =
     status === "failed"
-      ? "Provisioning failed; resources were rolled back. An admin can investigate and retry."
+      ? "Provisioning failed; resources were deleted. An admin can investigate and retry."
       : status === "cleanup_failed"
         ? "Provisioning needs admin investigation before it can be retried."
         : suffix.endsWith("-fail")
@@ -71,7 +71,7 @@ type RunResult =
 async function runAttempt(
   request: ProjectRequest,
   resource: Resource,
-  operation: "Create" | "Rollback",
+  operation: "Create" | "Delete",
   phase: string,
   attempt: number,
   version: ExecutionVersion,
@@ -153,7 +153,7 @@ async function runAttempt(
 async function runWithRetries(
   request: ProjectRequest,
   resource: Resource,
-  operation: "Create" | "Rollback",
+  operation: "Create" | "Delete",
   phase: string,
   version: ExecutionVersion,
 ): Promise<RunResult> {
@@ -164,8 +164,8 @@ async function runWithRetries(
     await emit(
       request,
       `${phase}-${resource}-${operation}-${attempt}-start`,
-      operation === "Create" ? "provisioning" : "rolling_back",
-      `${operation === "Create" ? "Provisioning" : "Rolling back"} ${label} (attempt ${attempt}/3)`,
+      operation === "Create" ? "provisioning" : "deleting",
+      `${operation === "Create" ? "Provisioning" : "Deleting"} ${label} (attempt ${attempt}/3)`,
       resource,
     );
     const result = await runAttempt(
@@ -180,8 +180,8 @@ async function runWithRetries(
       await emit(
         request,
         `${phase}-${resource}-${operation}-${attempt}-ok`,
-        operation === "Create" ? "provisioning" : "rolling_back",
-        `${label} ${operation === "Create" ? "provisioned" : "rolled back"}`,
+        operation === "Create" ? "provisioning" : "deleting",
+        `${label} ${operation === "Create" ? "provisioned" : "deleted"}`,
         resource,
       );
       return result;
@@ -189,7 +189,7 @@ async function runWithRetries(
     await emit(
       request,
       `${phase}-${resource}-${operation}-${attempt}-fail`,
-      operation === "Create" ? "provisioning" : "rolling_back",
+      operation === "Create" ? "provisioning" : "deleting",
       result.detail,
       resource,
     );
@@ -207,16 +207,16 @@ const resourceWorkflow = DBOS.registerWorkflow(
   (
     request: ProjectRequest,
     resource: Resource,
-    operation: "Create" | "Rollback",
+    operation: "Create" | "Delete",
     phase: string,
     version: ExecutionVersion,
   ) => runWithRetries(request, resource, operation, phase, version),
-  { name: "resourceTaskV2" },
+  { name: "resourceTaskV3" },
 );
 
 async function runResources(
   request: ProjectRequest,
-  operation: "Create" | "Rollback",
+  operation: "Create" | "Delete",
   phase: string,
   resources: Resource[],
   version: ExecutionVersion,
@@ -259,7 +259,7 @@ async function runResources(
   );
 }
 
-async function rollback(
+async function deleteResources(
   request: ProjectRequest,
   phase: string,
   version: ExecutionVersion,
@@ -267,11 +267,11 @@ async function rollback(
 ): Promise<RunResult[]> {
   await emit(
     request,
-    `${phase}-rollback-start`,
-    "rolling_back",
-    "Rolling back project resources",
+    `${phase}-delete-start`,
+    "deleting",
+    "Deleting project resources",
   );
-  return runResources(request, "Rollback", phase, resources, version);
+  return runResources(request, "Delete", phase, resources, version);
 }
 
 type TerminalResult = {
@@ -298,10 +298,10 @@ async function workflowFunction(
     });
     if (request.attempt > 1) {
       const oldVersion = await DBOS.runStep(() => previousVersion(request), {
-        name: "previous-source",
+        name: "previous-image",
       });
       const oldCleanup = oldVersion
-        ? await rollback(request, "prior", oldVersion)
+        ? await deleteResources(request, "prior", oldVersion)
         : [];
       if (oldCleanup.some((result) => !result.ok)) {
         return finish(
@@ -313,7 +313,7 @@ async function workflowFunction(
       }
     }
     const version = await DBOS.runStep(() => pinVersion(request), {
-      name: "pin-source",
+      name: "pin-image",
       retriesAllowed: true,
       maxAttempts: 3,
     });
@@ -338,28 +338,28 @@ async function workflowFunction(
       .map((result) => result.detail)
       .join("; ");
     if ((!azure.ok && azure.uncertain) || (!github.ok && github.uncertain)) {
-      const safeToRollback: Resource[] = [];
-      if (azure.ok || !azure.uncertain) safeToRollback.push("azure");
-      if (github.ok || !github.uncertain) safeToRollback.push("github");
-      const cleanup = safeToRollback.length
-        ? await rollback(request, "uncertain", version, safeToRollback)
+      const safeToDelete: Resource[] = [];
+      if (azure.ok || !azure.uncertain) safeToDelete.push("azure");
+      if (github.ok || !github.uncertain) safeToDelete.push("github");
+      const cleanup = safeToDelete.length
+        ? await deleteResources(request, "uncertain", version, safeToDelete)
         : [];
       return finish(
         request,
         "uncertain",
         "cleanup_failed",
-        `A task has an uncertain outcome. ${safeToRollback.length ? `Known completed tasks were rolled back${cleanup.some((result) => !result.ok) ? " with errors" : ""}. ` : ""}Admin investigation required: ${details}`,
+        `A task has an uncertain outcome. ${safeToDelete.length ? `Known completed tasks were deleted${cleanup.some((result) => !result.ok) ? " with errors" : ""}. ` : ""}Admin investigation required: ${details}`,
       );
     }
-    const cleanup = await rollback(request, "failure", version);
+    const cleanup = await deleteResources(request, "failure", version);
     const cleanupFailed = cleanup.some((result) => !result.ok);
     return finish(
       request,
       "failed",
       cleanupFailed ? "cleanup_failed" : "failed",
       cleanupFailed
-        ? `Provisioning failed (${details}); rollback also failed.`
-        : `Provisioning failed (${details}); resources were rolled back.`,
+        ? `Provisioning failed (${details}); deletion also failed.`
+        : `Provisioning failed (${details}); resources were deleted.`,
     );
   } catch (error) {
     return finish(
@@ -372,7 +372,7 @@ async function workflowFunction(
 }
 
 const projectWorkflow = DBOS.registerWorkflow(workflowFunction, {
-  name: "createProjectV2",
+  name: "createProjectV3",
 });
 
 function validRequest(body: unknown): body is ProjectRequest {
@@ -409,7 +409,7 @@ function validRequest(body: unknown): body is ProjectRequest {
 
 DBOS.setConfig({
   name: "forge-orchestrator",
-  applicationVersion: "container-runners-v1",
+  applicationVersion: "typescript-provisioner-v1",
   systemDatabaseUrl: process.env.DBOS_SYSTEM_DATABASE_URL,
 });
 await DBOS.launch();
@@ -447,7 +447,7 @@ receiver.subscribe({
                 result.status === "ready"
                   ? "Azure resource group and GitHub repository are ready."
                   : result.status === "failed"
-                    ? "Provisioning failed; resources were rolled back. An admin can investigate and retry."
+                    ? "Provisioning failed; resources were deleted. An admin can investigate and retry."
                     : "Provisioning needs admin investigation before it can be retried.",
               adminDetail: result.detail,
             } satisfies ProjectEvent,

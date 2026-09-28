@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "azure-create",
+      "name": "Create Azure resource group",
+      "runner": "privileged",
+      "resource": "azure",
+      "operation": "Create",
+      "runtime": "bun",
+      "entrypoint": "scripts/bicep.js",
+      "action": "deploy",
+      "bicepFile": "resources/project-resource-group.bicep"
+    },
+    {
+      "id": "azure-delete",
+      "name": "Delete Azure resource group",
+      "runner": "privileged",
+      "resource": "azure",
+      "operation": "Delete",
+      "runtime": "bun",
+      "entrypoint": "scripts/bicep.js",
+      "action": "delete"
+    },
+    {
+      "id": "github-create",
+      "name": "Create GitHub repository",
+      "runner": "privileged",
+      "resource": "github",
+      "operation": "Create",
+      "runtime": "bun",
+      "entrypoint": "scripts/github.js",
+      "action": "create"
+    },
+    {
+      "id": "github-delete",
+      "name": "Delete GitHub repository",
+      "runner": "privileged",
+      "resource": "github",
+      "operation": "Delete",
+      "runtime": "bun",
+      "entrypoint": "scripts/github.js",
+      "action": "delete"
+    }
+  ]
+}

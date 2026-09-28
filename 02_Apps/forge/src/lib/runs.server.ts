@@ -40,14 +40,20 @@ export async function applyRunEvent(
       "stopped",
       "unknown",
     ].includes(run.status) ||
-    !run.version?.source ||
+    !run.version?.manifest ||
+    !/^sha256:[a-f0-9]{64}$/.test(run.version.image) ||
+    !Array.isArray(run.arguments) ||
+    !run.arguments.every((arg) => typeof arg === "string") ||
     !run.parameters ||
     run.parameters.projectId !== run.projectId ||
     !Number.isInteger(run.projectAttempt) ||
     !Number.isFinite(Date.parse(run.createdAt))
   )
     throw new Error("Invalid runner event");
-  parseManifest(run.version.source.manifest);
+  const manifest = parseManifest(run.version.manifest);
+  const task = manifest.tasks.find((task) => task.id === run.task?.id);
+  if (!task || JSON.stringify(task) !== JSON.stringify(run.task))
+    throw new Error("Invalid runner task");
   for (const log of event.logs) {
     if (
       !Number.isSafeInteger(log.sequence) ||
@@ -100,7 +106,7 @@ export async function listRuns(offset: number) {
     name: string;
     code: string;
   }>(
-    `SELECT r.data #- '{version,source,files}' AS data,p.name,p.code FROM forge_runs r JOIN forge_projects p ON p.id=r.project_id
+    `SELECT r.data,p.name,p.code FROM forge_runs r JOIN forge_projects p ON p.id=r.project_id
      ORDER BY r.created_at DESC,r.id LIMIT 51 OFFSET $1`,
     [offset],
   );
@@ -146,6 +152,11 @@ export async function runLogs(id: string, after: number) {
 
 export async function taskCatalog() {
   await requireAdmin();
-  const { loadSource } = await import("@hero4hire/automation/source");
-  return loadSource();
+  await ensureMessaging();
+  const result = await (await database()).query<{
+    version: RunRecord["version"];
+  }>(
+    "SELECT data->'version' AS version FROM forge_runs ORDER BY created_at DESC,id DESC LIMIT 1",
+  );
+  return result.rows[0]?.version ?? null;
 }

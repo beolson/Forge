@@ -5,15 +5,15 @@ The form accepts a 1–50 character project name using ASCII letters, digits, sp
 ## Runtime flow
 
 1. TanStack Start inserts the project and a request into PostgreSQL in one transaction. Its outbox publisher sends the request to `forge-requests`.
-2. A separate DBOS service owns the durable workflow and launches Azure and GitHub containers in parallel. Each task gets three total attempts, with a configurable timeout defaulting to 30 minutes. The source snapshot and Docker image ID are pinned before creation. Containers use deterministic names so recovery finds the original execution after an interrupted API response.
-3. Privileged task containers hold provider credentials through a read-only volume. Azure creation uses a subscription-scoped Bicep template and Bash; GitHub uses Python. Creation adopts only matching `forgeProjectId` tags or `forge_project_id` custom properties. Separate rollback tasks delete only resources with those ownership markers.
-4. Automatic retries and rollback keep the original source and image. An admin retry cleans up using the preceding creation attempt's versions before resolving current source for fresh creation. An uncertain execution remains `cleanup_failed` for investigation.
+2. A separate DBOS service owns the durable workflow and launches Azure and GitHub containers in parallel. Each task gets three total attempts, with a configurable timeout defaulting to 30 minutes. The image ID and its packaged task catalog are pinned before creation. Containers use deterministic names so recovery finds the original execution after an interrupted API response.
+3. Privileged task containers hold provider credentials through a read-only volume. Azure and GitHub handlers use TypeScript with Bun; Azure deploys a subscription-scoped Bicep template. Creation adopts only matching `forgeProjectId` tags or `forge_project_id` custom properties. Delete tasks delete only resources with those ownership markers.
+4. Automatic retries and deletion keep the original image and packaged task catalog. An admin retry cleans up using the preceding creation attempt's versions before pinning the current image for fresh creation. An uncertain execution remains `cleanup_failed` for investigation.
 5. DBOS sends project progress to `forge-results`. Independently, the runner observer captures redacted stdout/stderr and persists run-event batches in a filesystem outbox. It resends those batches until the website commits them and sends an acknowledgement through `forge-requests`.
-6. The website saves run records and logs in PostgreSQL before notifying browsers over SSE. Creators receive their own progress and status; only admins can retrieve scripts, parameters, run details, and full logs. Reconnecting log views fetch by arrival cursor, so late or out-of-order batches are not skipped.
+6. The website saves run records and logs in PostgreSQL before notifying browsers over SSE. Creators receive their own progress and status; only admins can retrieve task configuration, parameters, run details, and full logs. Reconnecting log views fetch by arrival cursor, so late or out-of-order batches are not skipped.
 
-The Service Bus emulator has a one-hour maximum message lifetime and loses messages on restart. The website requeues unfinished project requests hourly; DBOS replays their durable terminal result. Runner events stay in the local outbox until the website acknowledges them, and repeat deliveries are deduplicated. Neither a browser disconnect nor a log-delivery outage causes provisioning retries or rollback.
+The Service Bus emulator has a one-hour maximum message lifetime and loses messages on restart. The website requeues unfinished project requests hourly; DBOS replays their durable terminal result. Runner events stay in the local outbox until the website acknowledges them, and repeat deliveries are deduplicated. Neither a browser disconnect nor a log-delivery outage causes provisioning retries or deletion.
 
-Detailed logs default to 90-day retention, configurable with `RUNNER_LOG_RETENTION_DAYS`; source snapshots, parameters, image IDs, and outcomes remain. The local observer also removes completed task containers after retention. Pinned image IDs and the `runner_data` volume must remain available for later rollback or admin retry.
+Detailed logs default to 90-day retention, configurable with `RUNNER_LOG_RETENTION_DAYS`; task catalogs, parameters, image IDs, and outcomes remain. The local observer also removes completed task containers after retention. Pinned image IDs and the `runner_data` volume must remain available for later deletion or admin retry.
 
 Each execution archives redacted output to its own writable subdirectory in `runner_data` before forwarding it to Docker. DBOS reads this durable JSONL file by byte offset, independently of Docker log rotation, and removes it after retention. Large diagnostic lines are redacted before splitting; log batches are bounded to fit Service Bus messages. Size local storage for all retained output.
 
@@ -45,36 +45,43 @@ Copy `appId`, `password`, and `tenant` from the command output into `AZURE_CLIEN
 
 ### Azure Bicep task
 
-The template is [project-resource-group.bicep](../04_Infrastructure/runners/resources/project-resource-group.bicep). It creates `az-{lowercase-app-code}-resgp` and writes the `forgeProjectId` and `forgeCode` ownership tags in the resource definition. It accepts `appCode`, `projectId`, and `location`; credentials remain inside the privileged task container.
+The template is [project-resource-group.bicep](../02_Apps/forge.provisioner/resources/project-resource-group.bicep).
+It creates `az-{lowercase-app-code}-resgp` and writes `forgeProjectId` and `forgeCode`
+ownership tags. Parameters are `appCode`, `projectId`, and `location`.
 
-The **Create Azure resource group** task runs `scripts/azure_create.sh` as a Bash task. Its wrapper validates the request, logs in with the service principal, and checks whether the group exists. An existing group must have the same `forgeProjectId`; otherwise the task fails without deploying. For a missing group, it runs:
+Both Azure tasks use `scripts/bicep.ts`. Its `deploy` action accepts a packaged
+Bicep path and structured JSON arguments: subscription scope, deployment name,
+location, parameters, and the expected resource-group ownership. After logging in
+with the service principal and checking ownership, it applies the template on
+every invocation, including to an existing owned group. A foreign group fails
+before deployment. Arguments are passed directly to Azure CLI without a shell.
+See [subscription deployment arguments](https://learn.microsoft.com/en-us/cli/azure/deployment/sub?view=azure-cli-latest#az-deployment-sub-create).
+
+The deployment name is `az-{lowercase-app-code}-rgdep`. Deployment metadata keeps
+its original location across retries. Bicep parameters use the attempt's pinned
+settings. Changing the location of an existing Azure resource group can still fail
+under Azure's own constraints.
+
+The `delete` action verifies the same ownership tag, calls `az group delete`, and
+waits up to 25 minutes for deletion. An absent group succeeds. Subscription
+deployment history is retained. Project retirement remains a future feature.
+
+The provisioner image pins Azure CLI, Bicep, and Bun versions and targets Linux
+x86_64. Each invocation uses an isolated temporary `AZURE_CONFIG_DIR`, removed
+when it finishes. Executables and templates are installed during the build.
+Rebuild with `just up`; existing attempts retain their pinned image.
+
+Test the handlers without cloud provisioning:
 
 ```sh
-az deployment sub create --subscription "$AZURE_SUBSCRIPTION_ID" \
-  --name "az-${app_code,,}-rgdep" \
-  --location "$deployment_location" \
-  --template-file resources/project-resource-group.bicep \
-  --parameters "appCode=$app_code" "projectId=$project_id" "location=$AZURE_REGION"
-```
-
-The subscription deployment record uses the registered `rgdep` designation. For its first deployment, `deployment_location` is the configured `AZURE_REGION`. On retry, the task looks up and retains the record's original location to avoid Azure's immutable deployment-location constraint if the system region changes. The template's `location` parameter still uses `AZURE_REGION` for a newly created group. Existing project groups are adopted without changing their location. See [subscription deployments with Bicep](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/deploy-to-subscription).
-
-**Roll back Azure resource group** remains a separate Bash task. After checking the same ownership tag, it calls `az group delete` and waits up to 25 minutes for deletion. Removing a resource from an incremental Bicep template does not delete it, so rollback uses an explicit CLI deletion. Subscription deployment history is retained for diagnosis. This is provisioning rollback; retirement remains a future feature.
-
-The runner image includes pinned Azure CLI and Bicep versions and currently targets Linux x86_64. Each task uses a private temporary `AZURE_CONFIG_DIR`, removed when the task exits, so parallel tasks do not share CLI token caches or subscription settings. The Bicep executable is installed when the image is built; tasks do not download it at runtime.
-
-Rebuild the runner image and start the stack with `just up`. The orchestrator pins the image ID for each project creation attempt; changing the tag does not change an existing workflow's image.
-
-Run the Azure task tests without cloud credentials or provisioning:
-
-```sh
-python3 -m unittest discover -s 04_Infrastructure/runners/tests -v
+cd 02_Apps/forge.provisioner
+bun run test
 ```
 
 ## GitHub organization setup
 
 1. As an organization owner, create a repository custom property named `forge_project_id`. Use **Text string**, allow repository actors to set it, and do not require a default value. This property is written in the same [repository creation request](https://docs.github.com/en/rest/repos/repos#create-an-organization-repository), so a retry can identify an earlier successful create. [GitHub custom property setup](https://docs.github.com/en/organizations/managing-organization-settings/managing-custom-properties-for-repositories-in-your-organization).
-2. Create a GitHub App owned by the organization. Give it **Administration: read and write** and **Custom properties: read and write** repository permissions. Install it on **All repositories** so it can see repositories it creates. GitHub documents the [repository creation permission](https://docs.github.com/en/rest/repos/repos#create-an-organization-repository) and [custom property permission](https://docs.github.com/en/rest/repos/custom-properties#create-or-update-custom-property-values-for-a-repository). The app must also be able to delete repositories during rollback.
+2. Create a GitHub App owned by the organization. Give it **Administration: read and write** and **Custom properties: read and write** repository permissions. Install it on **All repositories** so it can see repositories it creates. GitHub documents the [repository creation permission](https://docs.github.com/en/rest/repos/repos#create-an-organization-repository) and [custom property permission](https://docs.github.com/en/rest/repos/custom-properties#create-or-update-custom-property-values-for-a-repository). The app must also be able to delete repositories during deletion.
 3. In the app's GitHub settings, open **Private keys** and click **Generate a private key**. GitHub downloads a PEM file. There is no CLI command to generate a signing key for an existing GitHub App: GitHub must generate and register it. See [GitHub's private-key instructions](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps#generating-private-keys). Copy the downloaded file to a private location with these commands, replacing the source filename:
 
    ```sh
@@ -92,36 +99,20 @@ Create an Entra security group for Forge admins and set its object ID as `FORGE_
 
 If a user's group list exceeds the ID-token limit, Entra emits an overage indicator instead of `groups`. This slice treats that user as a regular creator; use groups assigned to the application or a future Graph-backed check for such users. [Microsoft group overage guidance](https://learn.microsoft.com/en-us/security/zero-trust/develop/configure-tokens-group-claims-app-roles#group-overages).
 
-## Script-loading GitHub App
+## Image contents
 
-Create a **separate** GitHub App for fetching the approved task source:
-
-1. Open GitHub **Settings → Developer settings → GitHub Apps → New GitHub App** (or your organization's GitHub App settings). Disable the webhook if you do not need it. Give this app repository **Contents: read-only** permission. Metadata read access is implicit. No provisioning or organization administration permissions are needed.
-2. Install the app using **Only select repositories**, selecting the Forge repository. The repository may be in a different organization from the repositories Forge provisions.
-3. Copy the **App ID** from the app's settings into `AUTOMATION_GITHUB_APP_ID`.
-4. Open the installed app's configuration. Copy the installation ID from the final numeric segment in the URL, for example `/settings/installations/123456`, into `AUTOMATION_GITHUB_INSTALLATION_ID`.
-5. In the app's **Private keys** section click **Generate a private key**. GitHub generates and downloads the registered PEM; generating a PEM with OpenSSL does not register it with GitHub. Store it using:
-
-   ```sh
-   install -d -m 700 "$HOME/.config/forge"
-   install -m 600 "$HOME/Downloads/<downloaded-source-key>.pem" "$HOME/.config/forge/source-app.pem"
-   openssl pkey -in "$HOME/.config/forge/source-app.pem" -check -noout
-   realpath "$HOME/.config/forge/source-app.pem"
-   ```
-
-   Put the printed absolute path in `AUTOMATION_GITHUB_PRIVATE_KEY_PATH`. The website container runs as UID 1000 and must be able to read this file. The orchestrator and website mount only this read-only app's key; provisioning containers never receive it.
-6. Set `AUTOMATION_REPOSITORY=owner/Forge`. By default, the loader fetches `04_Infrastructure/runners/tasks.json` from `main`, resolves its exact commit, and fetches only the manifest's declared scripts and dependencies at that commit. Installation tokens are restricted to that repository and Contents read permission.
-
-The manifest declares task IDs, friendly names, runner profile, resource, operation, runtime, entrypoint, and dependencies. Paths cannot escape the source root. An admin can inspect the catalog at `/admin/tasks`, and inspect each execution's saved source at `/admin/runs/<run-id>`. Editing links open GitHub's `main` branch; they never change an already pinned execution.
-
-Before this branch is merged to `main`, you can **explicitly** enable local development snapshots with `AUTOMATION_SOURCE_DIRECTORY=/approved-source`. This uses the read-only local runner folder mounted by Compose and records a content hash labeled **Local development snapshot**. It still provisions real resources. Leave that setting empty to use the approved GitHub source, including when deploying to Azure.
+The provisioner is built from the local `02_Apps/forge.provisioner` folder. Scripts,
+Bicep templates, and `tasks.json` travel together in the image. The manifest lists
+four tasks but only two handler entrypoints: Bicep deploy/delete and GitHub
+create/delete. No source-loading GitHub App or separate source settings are needed.
+The orchestrator pins the image ID and catalog; retries and cleanup use that image.
 
 ## Run
 
-Copy `.env.example` to `.env`, fill the database, authentication, provider, and source-app settings, then run `just up`. Existing provider credentials remain usable; old Semaphore settings are no longer used. The Compose image service builds `forge-runner:local`, and the credential seed service prepares the private runner volume.
+Copy `.env.example` to `.env`, fill the database, authentication, and provider settings, then run `just up`. Existing provider credentials remain usable; old Semaphore settings are no longer used. The Compose image service builds `forge-provisioner:local`, and the credential seed service prepares the private runner volume.
 
-Browse to `http://localhost:5321` and create a project. Creators see provisioning milestones. Admins can open **Provisioning runs** for individual task attempts, parameters, exact source and image versions, exit codes, and live logs. Detailed log retention can be configured using `RUNNER_LOG_RETENTION_DAYS=90`; timeout uses `RUNNER_TASK_TIMEOUT_MS=1800000`.
+Browse to `http://localhost:5321` and create a project. Creators see provisioning milestones. Admins can open **Provisioning runs** for individual task attempts, parameters, image IDs and task configuration, exit codes, and live logs. Detailed log retention can be configured using `RUNNER_LOG_RETENTION_DAYS=90`; timeout uses `RUNNER_TASK_TIMEOUT_MS=1800000`.
 
-If a task fails, inspect its admin run page and `just logs`. An admin can correct credentials, permissions, or provider state and use **Try again**. Failed projects retain their code and progress. There is no project deletion or retirement flow in this slice. No Semaphore execution history is imported.
+If a task fails, inspect its admin run page and `just logs`. An admin can correct credentials, permissions, or provider state and use **Try again**. Failed projects retain their code and progress. There is no project deletion or retirement flow in this slice. The new runner contract assumes a clean start; legacy run records and workflows are not migrated.
 
 `just down` keeps database and runner volumes. Ephemeral task containers are launched directly by DBOS rather than as Compose services; active tasks can finish while the orchestrator is down, and it recovers them when restarted. Stop active provisioning through the orchestrator's timeout handling before removing its runtime volumes.
