@@ -12,4 +12,6 @@ __pycache__/
 *.pyc
 .secrets/
 .aspire/
+04_Infrastructure/aspire/**/bin/
+04_Infrastructure/aspire/**/obj/
 *:Zone.Identifier

@@ -6,9 +6,11 @@ DBOS continues launching isolated provisioning-task containers itself.
 
 ## Setup and commands
 
-Use Aspire CLI **13.5.4**, Node.js **24 or newer**, Bun **1.3.14**, Docker, and
-Python 3. The existing provisioner image requires Linux x86_64. Aspire manages its
-TypeScript SDK and managed hosting dependencies; no C# application code is added.
+Use Aspire CLI **13.5.4**, Node.js **24 or newer**, Bun **1.3.14**, .NET SDK **10**,
+Docker, and Python 3. The existing provisioner image requires Linux x86_64. Aspire
+manages its TypeScript SDK and managed hosting dependencies. The AppHost remains
+TypeScript; `Forge.Aspire.Hosting` is a small .NET adapter for dynamic task status
+and console logs, which the generated TypeScript API does not fully expose.
 The root start and restore commands check that the CLI matches the pinned version.
 
 From the repository root:
@@ -53,7 +55,8 @@ OpenTelemetry instrumentation.
 
 The main app entries use the repository names with Aspire-compatible hyphens:
 `forge-app`, `forge-orchistrator`, and `forge-provisioner`. The provisioner entry
-builds its image; DBOS still launches individual task containers. Its network and
+observes DBOS-owned task containers; DBOS still launches individual tasks. Its
+image, network and
 credential setup jobs are grouped beneath it. SQL Server is grouped beneath the
 Service Bus emulator, and database/UI setup jobs beneath their dependencies.
 
@@ -65,6 +68,30 @@ directly, so Aspire does not generate an unused package installer.
 DBOS starts after both dependencies are ready and its setup jobs succeed. Forge
 starts after PostgreSQL and Service Bus are ready. Inspect a failed setup job's
 logs when its dependents remain waiting.
+
+## Provisioner task visibility
+
+Expand `forge-provisioner` in the dashboard to see each task's status and console
+logs. New runs include the project code, task ID, and stable run ID in their name;
+details include the project and task attempts, provider, operation, and pinned
+image. Earlier containers without those labels remain visible by run ID. The
+parent shows active and retained task counts.
+
+The observer polls Docker every two seconds using GET requests only. It discovers
+retained containers on startup, so tasks completed while Aspire was stopped also
+appear. Finished tasks remain visible until DBOS prunes their containers. Docker
+outages show unavailable/unknown states and observation retries automatically.
+There are no start/stop/restart actions on observed tasks; DBOS owns their lifecycle.
+
+Console logs start with the last 200 Docker log lines on attachment, then stream
+new output without replaying overlap. Only the executor's redacted JSON records
+are forwarded. Container environment variables and credential mounts are not
+copied into task details. The full durable log archive remains in Forge's admin
+run view; Aspire's console history is temporary.
+
+Aspire 13.5.4's one-shot `aspire describe` lists the static application model and
+omits dynamically observed tasks. The dashboard and `aspire describe --follow`
+use the resource event stream and include them.
 
 The AppHost reuses these existing Compose volumes:
 
@@ -114,5 +141,7 @@ bun run ci
 ```
 
 `aspire:build` restores dependencies and SDK modules before typechecking and
-compiling. These checks do not start Docker resources or require a configured
+compiling. `aspire:test` also runs the .NET adapter harness against a fake Docker
+API and real Aspire resource and console-log services. These checks do not start
+Docker resources or require a configured
 `.env`. Azure deployment and application instrumentation are separate follow-ups.

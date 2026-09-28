@@ -48,8 +48,9 @@ const network = await builder
   ])
   .waitForCompletion(preflight)
   .withHiddenOnCompletion();
+const provisioner = await builder.addForgeProvisioner("forge-provisioner");
 const runnerImage = await builder
-  .addExecutable("forge-provisioner", "docker", root, [
+  .addExecutable("forge-provisioner-image", "docker", root, [
     "build",
     "--tag",
     "forge-provisioner:local",
@@ -57,7 +58,9 @@ const runnerImage = await builder
     "02_Apps/forge.provisioner/Dockerfile",
     ".",
   ])
-  .waitForCompletion(preflight);
+  .waitForCompletion(preflight)
+  .withParentRelationship(provisioner)
+  .withHiddenOnCompletion();
 const cloudbeaverSeed = await builder
   .addExecutable("cloudbeaver-seed", "python3", root, [
     "04_Infrastructure/local/write-cloudbeaver-seed.py",
@@ -155,8 +158,8 @@ const credentials = await builder
   .withArgs(["python", "/seed.py"])
   .waitForCompletion(preflight)
   .withHiddenOnCompletion();
-await network.withParentRelationship(runnerImage);
-await credentials.withParentRelationship(runnerImage);
+await network.withParentRelationship(provisioner);
+await credentials.withParentRelationship(provisioner);
 for (const name of [
   "AZURE_TENANT_ID",
   "AZURE_CLIENT_ID",

@@ -270,6 +270,12 @@ export async function startTask(
           "forge.runId": id,
           "forge.projectId": request.projectId,
           "forge.runner": task.runner,
+          "forge.projectCode": request.code,
+          "forge.projectAttempt": String(request.attempt),
+          "forge.taskId": task.id,
+          "forge.taskAttempt": String(attempt),
+          "forge.resource": resource,
+          "forge.operation": operation,
         },
         WorkingDir: "/workspace",
         HostConfig: {

@@ -4,6 +4,8 @@
     "includes": [
       "**",
       "!!**/.aspire",
+      "!!04_Infrastructure/aspire/**/bin",
+      "!!04_Infrastructure/aspire/**/obj",
       "!**/routeTree.gen.ts",
       "!!**/.output",
       "!!**/.turbo",

@@ -233,6 +233,16 @@ test("recovering a lost create response and replaying a task starts only one con
   ).toBe(id);
   expect(creates - beforeCreates).toBe(1);
   expect(starts - beforeStarts).toBe(1);
+  expect(containers.get(`forge-run-${id}`)?.Config.Labels).toMatchObject({
+    "forge.runId": id,
+    "forge.projectId": request.projectId,
+    "forge.projectCode": request.code,
+    "forge.projectAttempt": "1",
+    "forge.taskId": "azure-create",
+    "forge.taskAttempt": "1",
+    "forge.resource": "azure",
+    "forge.operation": "Create",
+  });
   expect(await runners.taskStatus(id)).toBe("running");
 });
 test("recovering a lost start response does not restart an execution", async () => {
