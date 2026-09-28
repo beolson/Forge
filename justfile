@@ -3,6 +3,10 @@ compose := "docker compose --env-file .env -f 04_Infrastructure/local/compose.ya
 default:
     @just --list
 
+# Start the preferred local development stack with the Aspire dashboard.
+aspire:
+    bun run aspire:start
+
 # Build and start the local stack.
 up:
     @test -f .env || (echo "Copy .env.example to .env and set its secrets first." >&2; exit 1)

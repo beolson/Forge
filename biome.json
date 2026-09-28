@@ -3,6 +3,7 @@
   "files": {
     "includes": [
       "**",
+      "!!**/.aspire",
       "!**/routeTree.gen.ts",
       "!!**/.output",
       "!!**/.turbo",

@@ -6,8 +6,12 @@ Each package should have its own `package.json`. Use `workspace:*` for dependenc
 The Forge SSR app lives in [`02_Apps/forge`](02_Apps/forge/README.md).
 The DBOS orchestration app lives in `02_Apps/forge.orchistrator`.
 For the local Docker stack, see [`04_Infrastructure/local`](04_Infrastructure/local/README.md).
-Copy `.env.example` to `.env`, set the secrets, then run `just up` from the
-repository root.
+For local development, use the [TypeScript Aspire AppHost](04_Infrastructure/aspire/README.md).
+Copy `.env.example` to `.env`, set the secrets, run `bun install`, then run
+`just aspire` from the repository root. Aspire runs Forge with Vite hot reload,
+the containerized DBOS worker, and local dependencies with a dashboard.
+The Docker Compose stack remains available through `just up` as a fallback.
+Run only one stack at a time; both use the same persistent volumes and ports.
 
 The project-creation vertical slice is described in [docs/project-provisioning.md](docs/project-provisioning.md). Azure resource and sub-resource designations are registered in [docs/resource-designations.md](docs/resource-designations.md).
 
@@ -22,6 +26,7 @@ The project-creation vertical slice is described in [docs/project-provisioning.m
     bootstrap/       # First-time setup, including Azure CLI scripts
     bicep/           # Infrastructure that runs Forge itself
   local/             # Docker Compose stack for local development and debugging
+  aspire/            # TypeScript AppHost for local development with hot reload
 ```
 
 `catalog` is the source of truth for modules that customer deployments may use.
@@ -80,6 +85,9 @@ DBOS workflow, and GitHub App are not implemented yet.
 
 ```sh
 bun install
+bun run aspire:start
+bun run aspire:build
+bun run aspire:test
 bun run build
 bun run dev
 bun run test
@@ -89,4 +97,4 @@ bun run format
 bun run ci
 ```
 
-`check` runs Biome's format and lint checks without writing files. `format` writes formatting changes. `ci` checks formatting and linting, runs package type checks and tests, then builds. Turbo runs package scripts for builds, development, tests, and type checks.
+`check` runs Biome's format and lint checks without writing files. `format` writes formatting changes. `ci` checks formatting and linting, runs package type checks and tests, builds, then restores and checks the standalone AppHost and runs its tests. Turbo runs workspace package scripts for builds, development, tests, and type checks. `aspire:build` requires the pinned Aspire CLI and restores generated SDK modules before compiling; it does not require provider credentials or start the stack.

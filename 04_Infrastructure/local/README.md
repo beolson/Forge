@@ -1,5 +1,10 @@
 # Local Docker stack
 
+The preferred development entry point is the [TypeScript Aspire AppHost](../aspire/README.md),
+which runs Forge with hot reload. This Compose stack remains a fallback for running
+the containerized production website. Both stacks share ports and named volumes;
+stop Aspire with `aspire stop` before `just up`, or run `just down` before `just aspire`.
+
 The stack runs the Forge production website, separate DBOS orchestrator,
 PostgreSQL, CloudBeaver, and Microsoft's Service Bus emulator with SQL Server.
 DBOS launches an isolated Docker container for each provisioning or deletion task.
