@@ -4,15 +4,20 @@ The form accepts a 1–50 character project name using ASCII letters, digits, sp
 
 ## Runtime flow
 
-1. TanStack Start inserts the project and a request into PostgreSQL in one transaction. Its in-process outbox publisher sends the request to `forge-requests`.
-2. DBOS starts a durable workflow for that project attempt. It starts Azure and GitHub Semaphore creation tasks in parallel. Each task gets one initial run plus up to two retries. The configured task timeout defaults to 30 minutes. The task message is a short run key; the project request travels as a base64 JSON task argument. The templates must allow task argument overrides. Semaphore explicitly forwards the provider environment variables listed in `SEMAPHORE_FORWARDED_ENV_VARS` to its task processes.
-3. The Semaphore tasks alone hold provider credentials. Azure creation deploys a subscription-scoped Bicep template through Azure CLI; GitHub provisioning uses Python. They identify resources with an Azure `forgeProjectId` tag or a GitHub `forge_project_id` custom property. Repeated creation adopts only a matching resource; rollback deletes only a matching resource.
-4. If creation fails, DBOS calls both Semaphore rollback templates. A failed or uncertain cleanup remains visible as `cleanup_failed`. Admin retry first runs rollback again, then starts a fresh creation attempt.
-5. DBOS publishes progress to `forge-results`. The web server saves each result and pushes a refresh signal through SSE. On reconnect, the page loads the saved status and activity from PostgreSQL.
+1. TanStack Start inserts the project and a request into PostgreSQL in one transaction. Its outbox publisher sends the request to `forge-requests`.
+2. A separate DBOS service owns the durable workflow and launches Azure and GitHub containers in parallel. Each task gets three total attempts, with a configurable timeout defaulting to 30 minutes. The source snapshot and Docker image ID are pinned before creation. Containers use deterministic names so recovery finds the original execution after an interrupted API response.
+3. Privileged task containers hold provider credentials through a read-only volume. Azure creation uses a subscription-scoped Bicep template and Bash; GitHub uses Python. Creation adopts only matching `forgeProjectId` tags or `forge_project_id` custom properties. Separate rollback tasks delete only resources with those ownership markers.
+4. Automatic retries and rollback keep the original source and image. An admin retry cleans up using the preceding creation attempt's versions before resolving current source for fresh creation. An uncertain execution remains `cleanup_failed` for investigation.
+5. DBOS sends project progress to `forge-results`. Independently, the runner observer captures redacted stdout/stderr and persists run-event batches in a filesystem outbox. It resends those batches until the website commits them and sends an acknowledgement through `forge-requests`.
+6. The website saves run records and logs in PostgreSQL before notifying browsers over SSE. Creators receive their own progress and status; only admins can retrieve scripts, parameters, run details, and full logs. Reconnecting log views fetch by arrival cursor, so late or out-of-order batches are not skipped.
 
-The local Service Bus emulator limits message lifetime to one hour, so both local queues use that maximum with expiration dead-lettering. While a project remains unfinished, the web outbox resends its request hourly. DBOS uses the same workflow ID and replies with the durable terminal result after completion, allowing the web database to recover if a prior result expired during an outage. Inspect the Service Bus dead-letter queues for prolonged outages and investigate any project still unfinished after services recover. A cloud Service Bus deployment can use a longer queue lifetime.
+The Service Bus emulator has a one-hour maximum message lifetime and loses messages on restart. The website requeues unfinished project requests hourly; DBOS replays their durable terminal result. Runner events stay in the local outbox until the website acknowledges them, and repeat deliveries are deduplicated. Neither a browser disconnect nor a log-delivery outage causes provisioning retries or rollback.
 
-The first Compose deployment has one web server instance. If it is replicated, the result consumer and SSE clients need a shared fanout mechanism so an event consumed by one instance reaches clients on another.
+Detailed logs default to 90-day retention, configurable with `RUNNER_LOG_RETENTION_DAYS`; source snapshots, parameters, image IDs, and outcomes remain. The local observer also removes completed task containers after retention. Pinned image IDs and the `runner_data` volume must remain available for later rollback or admin retry.
+
+Each execution archives redacted output to its own writable subdirectory in `runner_data` before forwarding it to Docker. DBOS reads this durable JSONL file by byte offset, independently of Docker log rotation, and removes it after retention. Large diagnostic lines are redacted before splitting; log batches are bounded to fit Service Bus messages. Size local storage for all retained output.
+
+This Compose slice runs one web server and one orchestrator. Additional web replicas require a shared SSE fanout mechanism. The project runner profile is reserved; per-project service principals, Key Vault injection, in-group deployments, and Azure Container Apps deployment come later. See [the agreed runner design](container-job-runners.md).
 
 ## Azure setup
 
@@ -40,9 +45,9 @@ Copy `appId`, `password`, and `tenant` from the command output into `AZURE_CLIEN
 
 ### Azure Bicep task
 
-The template is [project-resource-group.bicep](../04_Infrastructure/semaphore/resources/project-resource-group.bicep). It creates `az-{lowercase-app-code}-resgp` and writes the `forgeProjectId` and `forgeCode` ownership tags in the resource definition. It accepts `appCode`, `projectId`, and `location`; credentials remain in the Semaphore task environment.
+The template is [project-resource-group.bicep](../04_Infrastructure/runners/resources/project-resource-group.bicep). It creates `az-{lowercase-app-code}-resgp` and writes the `forgeProjectId` and `forgeCode` ownership tags in the resource definition. It accepts `appCode`, `projectId`, and `location`; credentials remain inside the privileged task container.
 
-The **Create Azure resource group** template runs `scripts/azure_create.sh` as a Bash task. Its wrapper validates the request, logs in with the service principal, and checks whether the group exists. An existing group must have the same `forgeProjectId`; otherwise the task fails without deploying. For a missing group, it runs:
+The **Create Azure resource group** task runs `scripts/azure_create.sh` as a Bash task. Its wrapper validates the request, logs in with the service principal, and checks whether the group exists. An existing group must have the same `forgeProjectId`; otherwise the task fails without deploying. For a missing group, it runs:
 
 ```sh
 az deployment sub create --subscription "$AZURE_SUBSCRIPTION_ID" \
@@ -56,21 +61,14 @@ The subscription deployment record uses the registered `rgdep` designation. For 
 
 **Roll back Azure resource group** remains a separate Bash task. After checking the same ownership tag, it calls `az group delete` and waits up to 25 minutes for deletion. Removing a resource from an incremental Bicep template does not delete it, so rollback uses an explicit CLI deletion. Subscription deployment history is retained for diagnosis. This is provisioning rollback; retirement remains a future feature.
 
-The Semaphore image includes pinned Azure CLI and Bicep versions and currently targets Linux x86_64. Each task uses a private temporary `AZURE_CONFIG_DIR`, removed when the task exits, so parallel tasks do not share CLI token caches or subscription settings. The Bicep executable is installed when the image is built; tasks do not download it at runtime.
+The runner image includes pinned Azure CLI and Bicep versions and currently targets Linux x86_64. Each task uses a private temporary `AZURE_CONFIG_DIR`, removed when the task exits, so parallel tasks do not share CLI token caches or subscription settings. The Bicep executable is installed when the image is built; tasks do not download it at runtime.
 
-After upgrading an existing local stack, rebuild Semaphore and rerun bootstrap to change the Azure templates from Python to Bash while preserving their IDs:
-
-```sh
-docker compose --env-file .env -f 04_Infrastructure/local/compose.yaml up -d --no-deps --build semaphore
-docker compose --env-file .env -f 04_Infrastructure/local/compose.yaml run --rm --no-deps semaphore-bootstrap
-```
-
-Wait for active Semaphore tasks to finish before recreating its container.
+Rebuild the runner image and start the stack with `just up`. The orchestrator pins the image ID for each project creation attempt; changing the tag does not change an existing workflow's image.
 
 Run the Azure task tests without cloud credentials or provisioning:
 
 ```sh
-python3 -m unittest discover -s 04_Infrastructure/semaphore/tests -v
+python3 -m unittest discover -s 04_Infrastructure/runners/tests -v
 ```
 
 ## GitHub organization setup
@@ -86,7 +84,7 @@ python3 -m unittest discover -s 04_Infrastructure/semaphore/tests -v
    realpath "$HOME/.config/forge/github-app.pem"
    ```
 
-   Set `GITHUB_APP_PRIVATE_KEY_PATH` in `.env` to the absolute path printed by `realpath`. The file must be readable by UID 1001 inside the Semaphore container; if needed, grant that UID read access with `setfacl -m u:1001:r "$HOME/.config/forge/github-app.pem"`. Set `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, and `GITHUB_ORG` in `.env`. The Semaphore container alone mounts the PEM. The script uses a signed [GitHub App JWT and installation token](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app).
+   Set `GITHUB_APP_PRIVATE_KEY_PATH` in `.env` to the absolute path printed by `realpath`. The credential seed service copies the key into the private runner volume and sets ownership for runner UID 10001. Set `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, and `GITHUB_ORG` in `.env`. Only the credential seed service and privileged task containers mount this PEM. The script uses a signed [GitHub App JWT and installation token](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app).
 
 ## Website admin group
 
@@ -94,8 +92,36 @@ Create an Entra security group for Forge admins and set its object ID as `FORGE_
 
 If a user's group list exceeds the ID-token limit, Entra emits an overage indicator instead of `groups`. This slice treats that user as a regular creator; use groups assigned to the application or a future Graph-backed check for such users. [Microsoft group overage guidance](https://learn.microsoft.com/en-us/security/zero-trust/develop/configure-tokens-group-claims-app-roles#group-overages).
 
+## Script-loading GitHub App
+
+Create a **separate** GitHub App for fetching the approved task source:
+
+1. Open GitHub **Settings → Developer settings → GitHub Apps → New GitHub App** (or your organization's GitHub App settings). Disable the webhook if you do not need it. Give this app repository **Contents: read-only** permission. Metadata read access is implicit. No provisioning or organization administration permissions are needed.
+2. Install the app using **Only select repositories**, selecting the Forge repository. The repository may be in a different organization from the repositories Forge provisions.
+3. Copy the **App ID** from the app's settings into `AUTOMATION_GITHUB_APP_ID`.
+4. Open the installed app's configuration. Copy the installation ID from the final numeric segment in the URL, for example `/settings/installations/123456`, into `AUTOMATION_GITHUB_INSTALLATION_ID`.
+5. In the app's **Private keys** section click **Generate a private key**. GitHub generates and downloads the registered PEM; generating a PEM with OpenSSL does not register it with GitHub. Store it using:
+
+   ```sh
+   install -d -m 700 "$HOME/.config/forge"
+   install -m 600 "$HOME/Downloads/<downloaded-source-key>.pem" "$HOME/.config/forge/source-app.pem"
+   openssl pkey -in "$HOME/.config/forge/source-app.pem" -check -noout
+   realpath "$HOME/.config/forge/source-app.pem"
+   ```
+
+   Put the printed absolute path in `AUTOMATION_GITHUB_PRIVATE_KEY_PATH`. The website container runs as UID 1000 and must be able to read this file. The orchestrator and website mount only this read-only app's key; provisioning containers never receive it.
+6. Set `AUTOMATION_REPOSITORY=owner/Forge`. By default, the loader fetches `04_Infrastructure/runners/tasks.json` from `main`, resolves its exact commit, and fetches only the manifest's declared scripts and dependencies at that commit. Installation tokens are restricted to that repository and Contents read permission.
+
+The manifest declares task IDs, friendly names, runner profile, resource, operation, runtime, entrypoint, and dependencies. Paths cannot escape the source root. An admin can inspect the catalog at `/admin/tasks`, and inspect each execution's saved source at `/admin/runs/<run-id>`. Editing links open GitHub's `main` branch; they never change an already pinned execution.
+
+Before this branch is merged to `main`, you can **explicitly** enable local development snapshots with `AUTOMATION_SOURCE_DIRECTORY=/approved-source`. This uses the read-only local runner folder mounted by Compose and records a content hash labeled **Local development snapshot**. It still provisions real resources. Leave that setting empty to use the approved GitHub source, including when deploying to Azure.
+
 ## Run
 
-Copy `.env.example` to `.env`, fill the existing database, authentication, and Semaphore settings plus the provider settings above, then run `just up`. The Semaphore bootstrap registers four templates and writes its API connection file into a local Docker volume for the DBOS service. Browse to `http://localhost:5321` and create a test project.
+Copy `.env.example` to `.env`, fill the database, authentication, provider, and source-app settings, then run `just up`. Existing provider credentials remain usable; old Semaphore settings are no longer used. The Compose image service builds `forge-runner:local`, and the credential seed service prepares the private runner volume.
 
-Check `just logs` and the Semaphore UI at `http://localhost:3001` if a task fails. A failed project retains its code and activity log. An admin can correct credentials, permissions, or provider state manually and use **Try again**. There is no project deletion or retirement flow in this slice.
+Browse to `http://localhost:5321` and create a project. Creators see provisioning milestones. Admins can open **Provisioning runs** for individual task attempts, parameters, exact source and image versions, exit codes, and live logs. Detailed log retention can be configured using `RUNNER_LOG_RETENTION_DAYS=90`; timeout uses `RUNNER_TASK_TIMEOUT_MS=1800000`.
+
+If a task fails, inspect its admin run page and `just logs`. An admin can correct credentials, permissions, or provider state and use **Try again**. Failed projects retain their code and progress. There is no project deletion or retirement flow in this slice. No Semaphore execution history is imported.
+
+`just down` keeps database and runner volumes. Ephemeral task containers are launched directly by DBOS rather than as Compose services; active tasks can finish while the orchestrator is down, and it recovers them when restarted. Stop active provisioning through the orchestrator's timeout handling before removing its runtime volumes.

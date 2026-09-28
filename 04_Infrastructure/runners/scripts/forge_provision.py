@@ -1,4 +1,4 @@
-"""GitHub operations run only inside Semaphore. The task argument holds base64 JSON."""
+"""GitHub operations run only inside a provisioning container."""
 
 import base64
 import json

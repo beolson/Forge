@@ -16,6 +16,7 @@
         "@azure/service-bus": "^7.9.5",
         "@base-ui/react": "^1.8.0",
         "@fontsource-variable/geist": "^5.3.0",
+        "@hero4hire/automation": "workspace:*",
         "@hero4hire/project": "workspace:*",
         "@tailwindcss/vite": "^4.1.18",
         "@tanstack/react-router": "1.170.39",
@@ -51,6 +52,19 @@
       "dependencies": {
         "@azure/service-bus": "^7.9.5",
         "@dbos-inc/dbos-sdk": "^4.6.0",
+        "@hero4hire/automation": "workspace:*",
+        "@hero4hire/project": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "typescript": "^6.0.2",
+        "vitest": "5.0.2",
+      },
+    },
+    "03_Libraries/automation": {
+      "name": "@hero4hire/automation",
+      "version": "0.1.0",
+      "dependencies": {
         "@hero4hire/project": "workspace:*",
       },
       "devDependencies": {
@@ -211,6 +225,8 @@
     "@floating-ui/utils": ["@floating-ui/utils@0.2.12", "", {}, "sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww=="],
 
     "@fontsource-variable/geist": ["@fontsource-variable/geist@5.3.0", "", {}, "sha512-j0m+vLQuG5XAYoHtGCVu0spvlGreR3EzpECUVzkFmI1mTVnAO38l/NEPDCFgZ177JxzYJCLSmTQibIiYPilGrA=="],
+
+    "@hero4hire/automation": ["@hero4hire/automation@workspace:03_Libraries/automation"],
 
     "@hero4hire/forge": ["@hero4hire/forge@workspace:02_Apps/forge"],
 

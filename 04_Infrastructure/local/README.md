@@ -1,21 +1,11 @@
 # Local Docker stack
 
-This stack runs Forge's production build, its DBOS orchestrator, PostgreSQL, Semaphore UI, CloudBeaver,
-and Microsoft's Azure Service Bus emulator with its SQL Server dependency.
-PostgreSQL has separate `forge` and `semaphore` databases and users.
-`just up` also creates a `Forge local` project in Semaphore with a repository
-pointing at the local [`../semaphore`](../semaphore) folder. That folder is
-mounted read-only at `/opt/forge/semaphore` in the Semaphore container, so edits
-to its scripts and other files are available without rebuilding the image.
-The setup step is safe to run again and keeps an existing local project.
-It also registers the four project creation and rollback templates and shares a
-Semaphore API token with the DBOS container through a local Docker volume.
-Azure creation uses a subscription-scoped Bicep template with an Azure CLI Bash
-wrapper; Azure rollback is a separate Bash task, and the GitHub tasks use Python.
-The Semaphore image includes Azure CLI and Bicep and currently builds for Linux x86_64.
-Open the `Forge local` project, select **Task Templates**, and run **Verify local
-scripts**. A successful task prints `Forge local Semaphore script ran successfully.`
-in its log.
+The stack runs the Forge production website, separate DBOS orchestrator,
+PostgreSQL, CloudBeaver, and Microsoft's Service Bus emulator with SQL Server.
+DBOS launches an isolated Docker container for each provisioning or rollback task.
+There is no Semaphore service.
+
+## Setup
 
 From the repository root:
 
@@ -23,23 +13,33 @@ From the repository root:
 cp .env.example .env
 ```
 
-Set the empty passwords in the root `.env`. Use URL-safe characters (letters,
-numbers, hyphens, or underscores) for `FORGE_DB_PASSWORD`, because Compose puts
-it in a database URL. Generate
-`SEMAPHORE_ACCESS_KEY_ENCRYPTION` with
-`head -c32 /dev/urandom | base64` and keep it with the persisted Semaphore data.
+Fill the passwords and complete the Azure, GitHub provisioning App, source-loading
+GitHub App, and Entra admin-group instructions in
+[project-provisioning.md](../../docs/project-provisioning.md).
+Use URL-safe characters for `FORGE_DB_PASSWORD`, which is part of a database URL.
 Set a strong `SERVICEBUS_SQL_PASSWORD`. Read the
-[Service Bus emulator terms](https://github.com/Azure/azure-service-bus-emulator-installer/blob/main/EMULATOR_EULA.txt)
-and [SQL Server Linux terms](https://go.microsoft.com/fwlink/?LinkId=746388),
-then set `SERVICEBUS_ACCEPT_EULA=Y` if you accept both. The Microsoft emulator
-requires 2 GB of RAM and 5 GB of free disk space in addition to the rest of
-the stack.
-The Semaphore admin account is created on first startup; changing the admin
-password in `.env` later does not reset it.
-For real project provisioning, complete the Azure service principal, GitHub App,
-and Entra admin group steps in [project-provisioning.md](../../docs/project-provisioning.md)
-before starting the stack. A project submission creates real Azure and GitHub
-resources in the configured subscription and organization.
+[emulator terms](https://github.com/Azure/azure-service-bus-emulator-installer/blob/main/EMULATOR_EULA.txt)
+and [SQL Server Linux terms](https://go.microsoft.com/fwlink/?LinkId=746388), then
+set `SERVICEBUS_ACCEPT_EULA=Y` if you accept both. The emulator needs 2 GB RAM and
+5 GB free disk in addition to the rest of the stack.
+
+The runner image pins Azure CLI and Bicep versions and targets Linux x86_64.
+`runner-image` builds the image and exits. `runner-credentials` seeds a private
+volume with the existing service-principal and provisioning GitHub App credentials.
+Only privileged task containers mount that volume. Changing provider values and
+running `just up` reseeds credentials; the PEM is not baked into an image.
+
+The orchestrator mounts the local Docker socket, giving it control over the Docker
+host. Run this development stack on a trusted development machine. Each task uses
+its pinned image, a read-only source snapshot, a private writable temporary directory,
+and no restart policy. The restricted project runner profile is reserved for later
+project deployments and receives no credentials in this slice.
+
+Approved source is fetched from the Forge repository's `main` branch with a separate
+Contents read-only GitHub App. Before the new manifest is merged, explicitly set
+`AUTOMATION_SOURCE_DIRECTORY=/approved-source` to use a labeled local development
+snapshot. Leave it empty for GitHub source. Neither mode substitutes fake Azure or
+GitHub provisioning.
 
 ```sh
 just up
@@ -48,47 +48,56 @@ just logs
 just down
 ```
 
-To use Compose directly, prepare CloudBeaver's initial connection first:
+With Compose directly, prepare the CloudBeaver connection first:
 
 ```sh
 python3 04_Infrastructure/local/write-cloudbeaver-seed.py
 docker compose --env-file .env -f 04_Infrastructure/local/compose.yaml up --build -d --remove-orphans
 ```
 
-Forge is at <http://localhost:5321>, Semaphore UI at
-<http://localhost:3001>, CloudBeaver at <http://localhost:8081>, and PostgreSQL
-is available on `localhost:5432`. The Service Bus emulator listens on
-`localhost:5672`; its health endpoint is <http://localhost:5300/health>.
-It starts with `forge-requests` and `forge-results` queues. For an application
-running on the host, use:
+## Endpoints and administration
+
+- Forge: <http://localhost:5321>
+- Admin provisioning runs: <http://localhost:5321/admin/runs>
+- Admin scripts: <http://localhost:5321/admin/tasks>
+- CloudBeaver: <http://localhost:8081>
+- PostgreSQL: `localhost:5432`
+- Service Bus AMQP: `localhost:5672`; health: <http://localhost:5300/health>
+
+The emulator has `forge-requests` and `forge-results` queues. For host applications:
 
 ```text
 Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
 ```
 
-For another container in this Compose stack, replace `localhost` with
-`servicebus-emulator`. The emulator uses its fixed development key; do not use
-this connection string for Azure. It does not support Entra authentication,
-and messages are cleared when the emulator restarts. Queue changes in
-`servicebus-config.json` also require restarting the emulator.
+Inside Compose replace `localhost` with `servicebus-emulator`. The emulator's fixed
+key is for local development and does not support Entra authentication. Queue
+configuration changes require an emulator restart; its messages do not survive
+restarts. The website's project outbox and the runner's acknowledged event outbox
+provide replay. The first stack uses one web instance for SSE fanout.
 
-CloudBeaver allows anonymous access for this
-localhost-only development stack. Open its "Local PostgreSQL" connection to
-browse both the `forge` and `semaphore` databases. The connection uses PostgreSQL's
-local admin account and has "Show all databases" enabled. CloudBeaver's admin login is `forgeadmin` with
-`CLOUDBEAVER_ADMIN_PASSWORD` from the root `.env`.
+Creators see their own project progress and status. Admins can see every run,
+parameters, pinned source, and redacted live stdout/stderr. Logs default to 90-day
+retention (`RUNNER_LOG_RETENTION_DAYS`); summaries and versions remain. Each task
+has three total attempts and a default 30-minute timeout
+(`RUNNER_TASK_TIMEOUT_MS`).
 
-`just up` writes an ignored root `.cloudbeaver-seed.json` from `.env`. The init
-container copies it into CloudBeaver's named workspace volume on first startup.
-The generated seed and CloudBeaver workspace contain the local PostgreSQL admin
-password, so keep them on this development machine. Changing the PostgreSQL
-password or CloudBeaver admin password later requires updating the stored settings
-or recreating only the `cloudbeaver_data` volume.
-The Forge app stores projects, activity, and its Service Bus outbox in the `forge`
-database. DBOS stores its durable workflow state in the same database under its
-own schema.
-Compose stores PostgreSQL, Semaphore, and CloudBeaver data in named volumes. `just down`
-keeps them; running the equivalent Compose `down -v` command deletes them.
-Database creation runs only when the PostgreSQL volume is empty, so changing
-database passwords in `.env` later also requires changing the passwords inside
-PostgreSQL or recreating that volume.
+## Persistent data
+
+PostgreSQL holds the `forge` database, including DBOS's durable workflow schema.
+`runner_data` stores pinned source/image versions, recovery records, redacted log
+archives, and unacknowledged run events. `runner_credentials` stores provider secrets. Task containers are
+retained until completed output is captured and their retention period expires.
+Preserve runner data and pinned images to allow later rollback/admin retry.
+
+`just down` preserves named volumes. Tasks launched by DBOS are separate from
+Compose services and may finish while DBOS is stopped; DBOS recovers them on restart.
+Do not remove task containers before their outcome is recorded. This slice imports
+no Semaphore history and does not remove old volumes or databases.
+
+CloudBeaver permits anonymous access on this localhost-only stack. Its initial
+connection uses PostgreSQL's local admin account. The admin login is `forgeadmin`
+with `CLOUDBEAVER_ADMIN_PASSWORD`. `just up` writes an ignored
+`.cloudbeaver-seed.json`; the CloudBeaver workspace contains the local database
+password. Password changes after the first startup require changing the stored
+settings as well. Database initialization runs only for an empty PostgreSQL volume.

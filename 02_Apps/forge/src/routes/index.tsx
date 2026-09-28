@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { logout } from "@/lib/auth.functions";
 import {
@@ -87,6 +87,16 @@ function Home() {
             Sign out
           </button>
         </header>
+        {listing?.admin && (
+          <nav className="flex gap-5 text-sm">
+            <Link to="/admin/runs" className="underline">
+              Provisioning runs
+            </Link>
+            <Link to="/admin/tasks" className="underline">
+              Scripts
+            </Link>
+          </nav>
+        )}
 
         <section className="rounded-xl border p-6">
           <h2 className="mb-4 text-xl font-semibold">Create a project</h2>

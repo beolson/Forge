@@ -1,21 +1,22 @@
 {
-  "name": "@hero4hire/orchestrator",
+  "name": "@hero4hire/automation",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./source": "./src/source.ts"
+  },
   "scripts": {
-    "start": "bun src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@hero4hire/automation": "workspace:*",
-    "@azure/service-bus": "^7.9.5",
-    "@dbos-inc/dbos-sdk": "^4.6.0",
     "@hero4hire/project": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^22.10.2",
     "typescript": "^6.0.2",
-    "vitest": "5.0.2",
-    "@types/node": "^22.10.2"
+    "vitest": "5.0.2"
   }
 }

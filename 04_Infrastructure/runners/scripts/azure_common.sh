@@ -9,7 +9,7 @@ fail() {
     exit 1
 }
 
-trap 'echo "Forge azure ${operation} failed: Azure task command failed; see the Semaphore log" >&2' ERR
+trap 'echo "Forge azure ${operation} failed: Azure task command failed; see the admin run log" >&2' ERR
 
 [[ $# == 1 ]] || fail "Forge task requires one payload argument"
 project=$(printf '%s' "$1" | base64 -d) || fail "Invalid Forge task payload"

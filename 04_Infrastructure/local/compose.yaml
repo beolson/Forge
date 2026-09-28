@@ -9,7 +9,6 @@ services:
       POSTGRES_DB: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       FORGE_DB_PASSWORD: ${FORGE_DB_PASSWORD:?Set FORGE_DB_PASSWORD in .env}
-      SEMAPHORE_DB_PASSWORD: ${SEMAPHORE_DB_PASSWORD:?Set SEMAPHORE_DB_PASSWORD in .env}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
@@ -60,14 +59,21 @@ services:
       FORGE_ADMIN_GROUP_ID: ${FORGE_ADMIN_GROUP_ID:?Set FORGE_ADMIN_GROUP_ID in .env}
       AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID in .env}
       GITHUB_ORG: ${GITHUB_ORG:?Set GITHUB_ORG in .env}
+      RUNNER_LOG_RETENTION_DAYS: ${RUNNER_LOG_RETENTION_DAYS:-90}
+      AUTOMATION_REPOSITORY: ${AUTOMATION_REPOSITORY:-beolson/Forge}
+      AUTOMATION_GITHUB_APP_ID: ${AUTOMATION_GITHUB_APP_ID:-}
+      AUTOMATION_GITHUB_INSTALLATION_ID: ${AUTOMATION_GITHUB_INSTALLATION_ID:-}
+      AUTOMATION_GITHUB_PRIVATE_KEY_FILE: /run/secrets/source-app.pem
+      AUTOMATION_SOURCE_DIRECTORY: ${AUTOMATION_SOURCE_DIRECTORY:-}
       SERVICEBUS_CONNECTION_STRING: Endpoint=sb://servicebus-emulator;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
+    volumes:
+      - ${AUTOMATION_GITHUB_PRIVATE_KEY_PATH:-/dev/null}:/run/secrets/source-app.pem:ro
+      - ../runners:/approved-source:ro
     ports:
       - "127.0.0.1:5321:3000"
     depends_on:
       postgres:
         condition: service_healthy
-      semaphore-bootstrap:
-        condition: service_completed_successfully
       servicebus-emulator:
         condition: service_started
 
@@ -79,36 +85,44 @@ services:
     environment:
       DBOS_SYSTEM_DATABASE_URL: postgresql://forge:${FORGE_DB_PASSWORD:?Set FORGE_DB_PASSWORD in .env}@postgres:5432/forge
       SERVICEBUS_CONNECTION_STRING: Endpoint=sb://servicebus-emulator;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
-      SEMAPHORE_CONNECTION_FILE: /run/forge/semaphore-connection.json
-      SEMAPHORE_TASK_TIMEOUT_MS: ${SEMAPHORE_TASK_TIMEOUT_MS:-1800000}
+      RUNNER_TASK_TIMEOUT_MS: ${RUNNER_TASK_TIMEOUT_MS:-1800000}
+      RUNNER_LOG_RETENTION_DAYS: ${RUNNER_LOG_RETENTION_DAYS:-90}
+      RUNNER_IMAGE: forge-runner:local
+      AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID in .env}
+      AZURE_REGION: ${AZURE_REGION:?Set AZURE_REGION in .env}
+      GITHUB_ORG: ${GITHUB_ORG:?Set GITHUB_ORG in .env}
+      RUNNER_DATA_VOLUME: forge-local-runner-data
+      RUNNER_CREDENTIAL_VOLUME: forge-local-runner-credentials
+      RUNNER_NETWORK: forge-local_default
+      AUTOMATION_REPOSITORY: ${AUTOMATION_REPOSITORY:-beolson/Forge}
+      AUTOMATION_GITHUB_APP_ID: ${AUTOMATION_GITHUB_APP_ID:-}
+      AUTOMATION_GITHUB_INSTALLATION_ID: ${AUTOMATION_GITHUB_INSTALLATION_ID:-}
+      AUTOMATION_GITHUB_PRIVATE_KEY_FILE: /run/secrets/source-app.pem
+      AUTOMATION_SOURCE_DIRECTORY: ${AUTOMATION_SOURCE_DIRECTORY:-}
     volumes:
-      - semaphore_connection:/run/forge:ro
+      - runner_data:/var/lib/forge/runners
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${AUTOMATION_GITHUB_PRIVATE_KEY_PATH:-/dev/null}:/run/secrets/source-app.pem:ro
+      - ../runners:/approved-source:ro
     depends_on:
       postgres:
         condition: service_healthy
-      semaphore-bootstrap:
-        condition: service_completed_successfully
       servicebus-emulator:
         condition: service_started
+      runner-image:
+        condition: service_completed_successfully
+      runner-credentials:
+        condition: service_completed_successfully
 
-  semaphore:
+  runner-image:
+    image: forge-runner:local
     build:
-      context: ../semaphore
-      dockerfile: Dockerfile
-    restart: unless-stopped
+      context: ../runners
+    entrypoint: ["/bin/true"]
+
+  runner-credentials:
+    image: python:3.13-alpine
     environment:
-      SEMAPHORE_DB_DIALECT: postgres
-      SEMAPHORE_DB_HOST: postgres
-      SEMAPHORE_DB_PORT: "5432"
-      SEMAPHORE_DB: semaphore
-      SEMAPHORE_DB_USER: semaphore
-      SEMAPHORE_DB_PASS: ${SEMAPHORE_DB_PASSWORD:?Set SEMAPHORE_DB_PASSWORD in .env}
-      SEMAPHORE_ADMIN: ${SEMAPHORE_ADMIN:-admin}
-      SEMAPHORE_ADMIN_NAME: ${SEMAPHORE_ADMIN_NAME:-Admin}
-      SEMAPHORE_ADMIN_EMAIL: ${SEMAPHORE_ADMIN_EMAIL:-admin@localhost}
-      SEMAPHORE_ADMIN_PASSWORD: ${SEMAPHORE_ADMIN_PASSWORD:?Set SEMAPHORE_ADMIN_PASSWORD in .env}
-      SEMAPHORE_ACCESS_KEY_ENCRYPTION: ${SEMAPHORE_ACCESS_KEY_ENCRYPTION:?Set SEMAPHORE_ACCESS_KEY_ENCRYPTION in .env}
-      SEMAPHORE_FORWARDED_ENV_VARS: '["AZURE_TENANT_ID","AZURE_CLIENT_ID","AZURE_CLIENT_SECRET","AZURE_SUBSCRIPTION_ID","AZURE_REGION","GITHUB_ORG","GITHUB_APP_ID","GITHUB_APP_INSTALLATION_ID","GITHUB_APP_PRIVATE_KEY_FILE"]'
       AZURE_TENANT_ID: ${AZURE_TENANT_ID:?Set AZURE_TENANT_ID in .env}
       AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:?Set AZURE_CLIENT_ID in .env}
       AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:?Set AZURE_CLIENT_SECRET in .env}
@@ -117,31 +131,11 @@ services:
       GITHUB_ORG: ${GITHUB_ORG:?Set GITHUB_ORG in .env}
       GITHUB_APP_ID: ${GITHUB_APP_ID:?Set GITHUB_APP_ID in .env}
       GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?Set GITHUB_APP_INSTALLATION_ID in .env}
-      GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github-app.pem
-    ports:
-      - "127.0.0.1:3001:3000"
     volumes:
-      - semaphore_config:/etc/semaphore
-      - semaphore_data:/var/lib/semaphore
-      - ../semaphore:/opt/forge/semaphore:ro
-      - ${GITHUB_APP_PRIVATE_KEY_PATH:?Set GITHUB_APP_PRIVATE_KEY_PATH in .env}:/run/secrets/github-app.pem:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  semaphore-bootstrap:
-    image: python:3.13-alpine
-    environment:
-      SEMAPHORE_URL: http://semaphore:3000
-      SEMAPHORE_ADMIN: ${SEMAPHORE_ADMIN:-admin}
-      SEMAPHORE_ADMIN_PASSWORD: ${SEMAPHORE_ADMIN_PASSWORD:?Set SEMAPHORE_ADMIN_PASSWORD in .env}
-      SEMAPHORE_CONNECTION_FILE: /run/forge/semaphore-connection.json
-    volumes:
-      - ./configure-semaphore.py:/configure-semaphore.py:ro
-      - semaphore_connection:/run/forge
-    command: ["python", "/configure-semaphore.py"]
-    depends_on:
-      - semaphore
+      - runner_credentials:/credentials
+      - ./seed-runner-credentials.py:/seed.py:ro
+      - ${GITHUB_APP_PRIVATE_KEY_PATH:?Set GITHUB_APP_PRIVATE_KEY_PATH in .env}:/input/github-app.pem:ro
+    command: ["python", "/seed.py"]
 
   cloudbeaver-init:
     image: busybox:1.37.0
@@ -181,7 +175,12 @@ services:
 
 volumes:
   postgres_data:
-  semaphore_config:
-  semaphore_data:
-  semaphore_connection:
+  runner_data:
+    name: forge-local-runner-data
+  runner_credentials:
+    name: forge-local-runner-credentials
   cloudbeaver_data:
+
+networks:
+  default:
+    name: forge-local_default

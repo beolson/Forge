@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "azure-create",
+      "name": "Create Azure resource group",
+      "runner": "privileged",
+      "resource": "azure",
+      "operation": "Create",
+      "runtime": "bash",
+      "entrypoint": "scripts/azure_create.sh",
+      "files": [
+        "scripts/azure_common.sh",
+        "resources/project-resource-group.bicep"
+      ]
+    },
+    {
+      "id": "azure-rollback",
+      "name": "Roll back Azure resource group",
+      "runner": "privileged",
+      "resource": "azure",
+      "operation": "Rollback",
+      "runtime": "bash",
+      "entrypoint": "scripts/azure_rollback.sh",
+      "files": ["scripts/azure_common.sh"]
+    },
+    {
+      "id": "github-create",
+      "name": "Create GitHub repository",
+      "runner": "privileged",
+      "resource": "github",
+      "operation": "Create",
+      "runtime": "python",
+      "entrypoint": "scripts/github_create.py",
+      "files": ["scripts/forge_provision.py"]
+    },
+    {
+      "id": "github-rollback",
+      "name": "Roll back GitHub repository",
+      "runner": "privileged",
+      "resource": "github",
+      "operation": "Rollback",
+      "runtime": "python",
+      "entrypoint": "scripts/github_rollback.py",
+      "files": ["scripts/forge_provision.py"]
+    }
+  ]
+}
