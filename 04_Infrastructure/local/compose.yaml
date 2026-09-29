@@ -47,7 +47,7 @@ services:
   forge:
     build:
       context: ../..
-      dockerfile: 02_Apps/forge/Dockerfile
+      dockerfile: 02_Apps/forge.app/Dockerfile
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://forge:${FORGE_DB_PASSWORD:?Set FORGE_DB_PASSWORD in .env}@postgres:5432/forge

@@ -272,7 +272,7 @@ for (const name of [
 
 const forge = await builder
   // Run the existing Bun/Vite dev script without generating an unused installer.
-  .addExecutable("forge-app", "bun", resolve(root, "02_Apps/forge"), [
+  .addExecutable("forge-app", "bun", resolve(root, "02_Apps/forge.app"), [
     "run",
     "dev",
   ])

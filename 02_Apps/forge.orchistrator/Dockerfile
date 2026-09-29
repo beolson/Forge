@@ -1,7 +1,7 @@
 FROM oven/bun:1.3.14-alpine
 WORKDIR /workspace
 COPY package.json bun.lock ./
-COPY 02_Apps/forge/package.json 02_Apps/forge/package.json
+COPY 02_Apps/forge.app/package.json 02_Apps/forge.app/package.json
 COPY 02_Apps/forge.orchistrator/package.json 02_Apps/forge.orchistrator/package.json
 COPY 03_Libraries/project/package.json 03_Libraries/project/package.json
 COPY 03_Libraries/automation/package.json 03_Libraries/automation/package.json

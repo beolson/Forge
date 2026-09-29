@@ -9,7 +9,7 @@
         "turbo": "2.11.4",
       },
     },
-    "02_Apps/forge": {
+    "02_Apps/forge.app": {
       "name": "@hero4hire/forge",
       "dependencies": {
         "@azure/msal-node": "^7.0.0",
@@ -240,7 +240,7 @@
 
     "@hero4hire/automation": ["@hero4hire/automation@workspace:03_Libraries/automation"],
 
-    "@hero4hire/forge": ["@hero4hire/forge@workspace:02_Apps/forge"],
+    "@hero4hire/forge": ["@hero4hire/forge@workspace:02_Apps/forge.app"],
 
     "@hero4hire/forge.orchistrator": ["@hero4hire/forge.orchistrator@workspace:02_Apps/forge.orchistrator"],
 

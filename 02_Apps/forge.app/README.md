@@ -14,7 +14,7 @@ To run the production server locally:
 
 ```sh
 bun run build
-cd 02_Apps/forge
+cd 02_Apps/forge.app
 bun run start
 ```
 
