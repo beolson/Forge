@@ -1,6 +1,7 @@
 """Prepare CloudBeaver's initial PostgreSQL connection from the root .env."""
 
 import json
+import os
 from pathlib import Path
 
 
@@ -8,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def read_password() -> str:
+    if os.environ.get("POSTGRES_PASSWORD"):
+        return os.environ["POSTGRES_PASSWORD"]
     for line in (ROOT / ".env").read_text().splitlines():
         if line.startswith("POSTGRES_PASSWORD="):
             password = line.partition("=")[2].strip().strip('"\'')

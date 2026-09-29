@@ -9,7 +9,7 @@
         "turbo": "2.11.4",
       },
     },
-    "02_Apps/forge": {
+    "02_Apps/forge.app": {
       "name": "@hero4hire/forge",
       "dependencies": {
         "@azure/msal-node": "^7.0.0",
@@ -47,11 +47,23 @@
         "vitest": "5.0.2",
       },
     },
-    "02_Apps/orchestrator": {
-      "name": "@hero4hire/orchestrator",
+    "02_Apps/forge.orchistrator": {
+      "name": "@hero4hire/forge.orchistrator",
       "dependencies": {
         "@azure/service-bus": "^7.9.5",
         "@dbos-inc/dbos-sdk": "^4.6.0",
+        "@hero4hire/automation": "workspace:*",
+        "@hero4hire/project": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "typescript": "^6.0.2",
+        "vitest": "5.0.2",
+      },
+    },
+    "02_Apps/forge.provisioner": {
+      "name": "@hero4hire/provisioner",
+      "dependencies": {
         "@hero4hire/automation": "workspace:*",
         "@hero4hire/project": "workspace:*",
       },
@@ -228,11 +240,13 @@
 
     "@hero4hire/automation": ["@hero4hire/automation@workspace:03_Libraries/automation"],
 
-    "@hero4hire/forge": ["@hero4hire/forge@workspace:02_Apps/forge"],
+    "@hero4hire/forge": ["@hero4hire/forge@workspace:02_Apps/forge.app"],
 
-    "@hero4hire/orchestrator": ["@hero4hire/orchestrator@workspace:02_Apps/orchestrator"],
+    "@hero4hire/forge.orchistrator": ["@hero4hire/forge.orchistrator@workspace:02_Apps/forge.orchistrator"],
 
     "@hero4hire/project": ["@hero4hire/project@workspace:03_Libraries/project"],
+
+    "@hero4hire/provisioner": ["@hero4hire/provisioner@workspace:02_Apps/forge.provisioner"],
 
     "@hono/node-server": ["@hono/node-server@2.1.1", "", { "peerDependencies": { "hono": "^4" } }, "sha512-ELuehkj5VCBdgEw9zs+ivkKwyzzUCSQuE96YmiPvn1ECBoZCczbFXJLeEGMTYjphP6gydh4pHMqEYPVMYUVgQg=="],
 

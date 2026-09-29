@@ -7,13 +7,17 @@
     "03_Libraries/*"
   ],
   "scripts": {
+    "aspire:start": "bun 04_Infrastructure/aspire/cli.mts run",
+    "aspire:restore": "bun 04_Infrastructure/aspire/cli.mts restore",
+    "aspire:build": "bun run aspire:restore && bun run --cwd 04_Infrastructure/aspire aspire:build",
+    "aspire:test": "bun run --cwd 04_Infrastructure/aspire test",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
     "format": "biome format --write .",
     "check": "biome check .",
-    "ci": "bun run check && bun run typecheck && bun run test && bun run build"
+    "ci": "bun run check && bun run typecheck && bun run test && bun run build && bun run aspire:build && bun run aspire:test"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",

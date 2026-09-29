@@ -1,16 +1,14 @@
 {
-  "name": "@hero4hire/automation",
-  "version": "0.1.0",
+  "name": "@hero4hire/provisioner",
   "private": true,
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  },
   "scripts": {
+    "build": "bun build src/execute.ts src/catalog.ts scripts/bicep.ts scripts/github.ts --target=bun --outdir=dist --root=.",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
+    "@hero4hire/automation": "workspace:*",
     "@hero4hire/project": "workspace:*"
   },
   "devDependencies": {

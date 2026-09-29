@@ -1,8 +1,13 @@
 # Local Docker stack
 
+The preferred development entry point is the [TypeScript Aspire AppHost](../aspire/README.md),
+which runs Forge with hot reload. This Compose stack remains a fallback for running
+the containerized production website. Both stacks share ports and named volumes;
+stop Aspire with `aspire stop` before `just up`, or run `just down` before `just aspire`.
+
 The stack runs the Forge production website, separate DBOS orchestrator,
 PostgreSQL, CloudBeaver, and Microsoft's Service Bus emulator with SQL Server.
-DBOS launches an isolated Docker container for each provisioning or rollback task.
+DBOS launches an isolated Docker container for each provisioning or deletion task.
 There is no Semaphore service.
 
 ## Setup
@@ -13,8 +18,7 @@ From the repository root:
 cp .env.example .env
 ```
 
-Fill the passwords and complete the Azure, GitHub provisioning App, source-loading
-GitHub App, and Entra admin-group instructions in
+Fill the passwords and complete the Azure, GitHub provisioning App, and Entra admin-group instructions in
 [project-provisioning.md](../../docs/project-provisioning.md).
 Use URL-safe characters for `FORGE_DB_PASSWORD`, which is part of a database URL.
 Set a strong `SERVICEBUS_SQL_PASSWORD`. Read the
@@ -31,15 +35,14 @@ running `just up` reseeds credentials; the PEM is not baked into an image.
 
 The orchestrator mounts the local Docker socket, giving it control over the Docker
 host. Run this development stack on a trusted development machine. Each task uses
-its pinned image, a read-only source snapshot, a private writable temporary directory,
+its pinned image with packaged scripts and templates, a private writable temporary directory,
 and no restart policy. The restricted project runner profile is reserved for later
 project deployments and receives no credentials in this slice.
 
-Approved source is fetched from the Forge repository's `main` branch with a separate
-Contents read-only GitHub App. Before the new manifest is merged, explicitly set
-`AUTOMATION_SOURCE_DIRECTORY=/approved-source` to use a labeled local development
-snapshot. Leave it empty for GitHub source. Neither mode substitutes fake Azure or
-GitHub provisioning.
+The TypeScript provisioner lives in `02_Apps/forge.provisioner`. The image includes
+whatever code, templates, and task configuration are in that folder when built.
+No runtime source download is required. The orchestrator pins the immutable image
+ID for every attempt; rebuild to change future attempts.
 
 ```sh
 just up
@@ -59,7 +62,7 @@ docker compose --env-file .env -f 04_Infrastructure/local/compose.yaml up --buil
 
 - Forge: <http://localhost:5321>
 - Admin provisioning runs: <http://localhost:5321/admin/runs>
-- Admin scripts: <http://localhost:5321/admin/tasks>
+- Admin task configuration: <http://localhost:5321/admin/tasks>
 - CloudBeaver: <http://localhost:8081>
 - PostgreSQL: `localhost:5432`
 - Service Bus AMQP: `localhost:5672`; health: <http://localhost:5300/health>
@@ -77,7 +80,7 @@ restarts. The website's project outbox and the runner's acknowledged event outbo
 provide replay. The first stack uses one web instance for SSE fanout.
 
 Creators see their own project progress and status. Admins can see every run,
-parameters, pinned source, and redacted live stdout/stderr. Logs default to 90-day
+parameters, pinned image IDs, and redacted live stdout/stderr. Logs default to 90-day
 retention (`RUNNER_LOG_RETENTION_DAYS`); summaries and versions remain. Each task
 has three total attempts and a default 30-minute timeout
 (`RUNNER_TASK_TIMEOUT_MS`).
@@ -85,15 +88,17 @@ has three total attempts and a default 30-minute timeout
 ## Persistent data
 
 PostgreSQL holds the `forge` database, including DBOS's durable workflow schema.
-`runner_data` stores pinned source/image versions, recovery records, redacted log
+`runner_data` stores pinned image versions and task catalogs, recovery records, redacted log
 archives, and unacknowledged run events. `runner_credentials` stores provider secrets. Task containers are
 retained until completed output is captured and their retention period expires.
-Preserve runner data and pinned images to allow later rollback/admin retry.
+Preserve runner data and pinned images to allow later deletion/admin retry.
 
 `just down` preserves named volumes. Tasks launched by DBOS are separate from
 Compose services and may finish while DBOS is stopped; DBOS recovers them on restart.
-Do not remove task containers before their outcome is recorded. This slice imports
-no Semaphore history and does not remove old volumes or databases.
+Do not remove task containers before their outcome is recorded. The new TypeScript contract assumes a clean start and does not resume or migrate
+legacy runner records or workflows. Before running this version, use a fresh local
+PostgreSQL database, DBOS state, and runner-data volume. Database initialization
+runs only for an empty PostgreSQL volume. This change does not erase existing data.
 
 CloudBeaver permits anonymous access on this localhost-only stack. Its initial
 connection uses PostgreSQL's local admin account. The admin login is `forgeadmin`

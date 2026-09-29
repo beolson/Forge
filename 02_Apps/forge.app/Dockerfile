@@ -1,0 +1,28 @@
+FROM oven/bun:1.3.14-alpine AS build
+
+WORKDIR /workspace
+
+# Install from the workspace lockfile before copying source for better layer caching.
+COPY package.json bun.lock ./
+COPY 02_Apps/forge.app/package.json 02_Apps/forge.app/package.json
+COPY 03_Libraries/project/package.json 03_Libraries/project/package.json
+COPY 03_Libraries/automation/package.json 03_Libraries/automation/package.json
+COPY 02_Apps/forge.orchistrator/package.json 02_Apps/forge.orchistrator/package.json
+COPY 02_Apps/forge.provisioner/package.json 02_Apps/forge.provisioner/package.json
+RUN bun install --frozen-lockfile
+
+COPY . .
+RUN cd 02_Apps/forge.app && bun run build
+
+FROM oven/bun:1.3.14-alpine AS runtime
+
+WORKDIR /app/02_Apps/forge.app
+ENV NODE_ENV=production \
+    NITRO_HOST=0.0.0.0 \
+    NITRO_PORT=3000
+
+COPY --from=build --chown=bun:bun /workspace/02_Apps/forge.app/.output ./.output
+
+USER bun
+EXPOSE 3000
+CMD ["bun", ".output/server/index.mjs"]
